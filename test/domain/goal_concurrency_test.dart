@@ -21,7 +21,87 @@ Goal goal(String id) => Goal(
   unit: 'videos',
 );
 
+class _DelayedRepository extends MemoryEventRepository {
+  int activeWrites = 0;
+  int maximumConcurrentWrites = 0;
+
+  @override
+  Future<void> write({
+    required List<ItsTheDayEvent> events,
+    required String? selectedId,
+    List<Goal> goals = const [],
+    String? selectedGoalId,
+  }) async {
+    activeWrites++;
+    if (activeWrites > maximumConcurrentWrites)
+      maximumConcurrentWrites = activeWrites;
+    try {
+      await Future<void>.delayed(const Duration(milliseconds: 15));
+      await super.write(
+        events: events,
+        selectedId: selectedId,
+        goals: goals,
+        selectedGoalId: selectedGoalId,
+      );
+    } finally {
+      activeWrites--;
+    }
+  }
+}
+
 void main() {
+  test('event and goal writes share one snapshot queue', () async {
+    for (final eventFirst in [true, false]) {
+      final repo = _DelayedRepository();
+      final c = controller(repo);
+      await c.initialize();
+      final e = ItsTheDayEvent(
+        id: 'concurrent-event',
+        title: 'Trip',
+        start: DateTime(2027, 2, 1),
+      );
+      await Future.wait([
+        if (eventFirst) c.saveEvent(e),
+        c.saveGoal(goal('concurrent-goal')),
+        if (!eventFirst) c.saveEvent(e),
+      ]);
+      final stored = await repo.read();
+      expect(stored.events.any((item) => item.id == e.id), isTrue);
+      expect(stored.goals.map((item) => item.id), contains('concurrent-goal'));
+      expect(repo.maximumConcurrentWrites, 1);
+    }
+  });
+
+  test(
+    'event delete and selection cannot drop concurrent goal progress',
+    () async {
+      final repo = _DelayedRepository();
+      final c = controller(repo);
+      await c.initialize();
+      final e = ItsTheDayEvent(
+        id: 'e',
+        title: 'Trip',
+        start: DateTime(2027, 2, 1),
+      );
+      await c.saveEvent(e);
+      await c.saveGoal(goal('g'));
+      final entry = GoalEntry(
+        id: 'result',
+        amount: 2,
+        at: DateTime(2026, 9, 30),
+      );
+      await Future.wait([c.selectEvent(e.id), c.addEntry('g', entry)]);
+      await Future.wait([
+        c.deleteEvent(e.id),
+        c.addEntry('g', GoalEntry(id: 'next', amount: 1, at: entry.at)),
+      ]);
+      final stored = await repo.read();
+      expect(stored.events.any((item) => item.id == e.id), isFalse);
+      expect(stored.goals.single.completed, 3);
+      expect(repo.maximumConcurrentWrites, 1);
+    },
+  );
+
   test(
     'concurrent quantity operations retain every entry exactly once',
     () async {

@@ -133,7 +133,10 @@ class ItsTheDayController extends ChangeNotifier {
     return CountdownCalculator.calculate(event, _clock());
   }
 
-  Future<SaveEventResult> saveEvent(ItsTheDayEvent event) async {
+  Future<SaveEventResult> saveEvent(ItsTheDayEvent event) =>
+      _serialize(() => _saveEvent(event));
+
+  Future<SaveEventResult> _saveEvent(ItsTheDayEvent event) async {
     final existing = _find(event.id);
     String? warning;
     NotificationPermissionStatus? permission;
@@ -180,7 +183,10 @@ class ItsTheDayController extends ChangeNotifier {
     );
   }
 
-  Future<void> deleteEvent(String eventId) async {
+  Future<void> deleteEvent(String eventId) =>
+      _serialize(() => _deleteEvent(eventId));
+
+  Future<void> _deleteEvent(String eventId) async {
     await _reminders.cancelEvent(eventId);
     final next = _events.where((event) => event.id != eventId).toList();
     final selection = _selectedId == eventId
@@ -198,7 +204,10 @@ class ItsTheDayController extends ChangeNotifier {
     await _syncWidget();
   }
 
-  Future<void> selectEvent(String eventId) async {
+  Future<void> selectEvent(String eventId) =>
+      _serialize(() => _selectEvent(eventId));
+
+  Future<void> _selectEvent(String eventId) async {
     if (_find(eventId) == null || eventId == _selectedId) return;
     await _repository.write(
       events: _events,
@@ -237,9 +246,12 @@ class ItsTheDayController extends ChangeNotifier {
 
   Future<void> _mutationTail = Future<void>.value();
 
-  Future<void> _serialize(Future<void> Function() operation) {
+  Future<T> _serialize<T>(Future<T> Function() operation) {
     final result = _mutationTail.then((_) => operation());
-    _mutationTail = result.catchError((Object _) {});
+    _mutationTail = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {},
+    );
     return result;
   }
 
