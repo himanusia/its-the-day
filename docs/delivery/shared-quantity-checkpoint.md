@@ -11,7 +11,7 @@ Contribution timestamps are assigned by the server and displayed in local time. 
 ## Parent verification
 
 - Flutter analyze: clean.
-- Default Flutter suite: 62 passing tests, two opt-in integration tests skipped.
+- Default Flutter suite after recovery fixes: 67 passing tests, two opt-in integration tests skipped.
 - Server typecheck: clean; nine server tests pass.
 - Opt-in actual client/loopback Worker+D1 integration: two tests pass. The added quantity journey creates and lists a group goal, logs results from two ephemeral accounts, checks authoritative total/results/notes, repeats an unchanged mutation key without adding a result, checks unrelated-group filtering, and rejects a revoked member's read.
 - ARM64 debug APK built with `GROUPS_API_URL=http://10.0.2.2:8787`, installed successfully on the API36 ARM64 emulator.
@@ -39,4 +39,8 @@ The opt-in tests deliberately create ephemeral local QA data. Credentials remain
 
 The exercised backend is a local Cloudflare Worker/Hono/Better Auth+D1 runtime. No remote resources have been provisioned or deployed by this checkpoint. Workers/D1 remains the authoritative backend target, with Durable Objects, Queues and scheduled processing planned for coordination/delivery, optional private R2 for photos, and Workers Static Assets for same-origin web hosting. Those planned services are not claimed implemented here.
 
-Independent exact-source review is pending. This document does not establish merge state. Shared checklist/individual mode/edit-delete/admin UI, offline outbox/reconciliation/realtime, shared alarms/notification delivery, live Google OAuth, browser-cookie E2E and physical-device QA remain outside this slice. The broader shared-goal gate in #6 stays open.
+Initial independent exact-source review FAILED at `0e8c11abf9b46e7457886cdb5f45218236a90850`: revoked mutation handling retained stale detail and surfaced a raw error; dialog account recovery did not invalidate parent data; the pre-submit date preview used the client clock despite server-owned timestamps. Fix commit `c9e8cc3d33019656405debd2b6f7351c3141ca07` clears parent cached data on account-recovery start, refreshes on return, invalidates data on permission/not-found mutation errors and uses human revoked messaging. Widget regressions exercise add revocation/cancel and both dialogs' account return/cancel, plus preserved draft/key and server-date copy. The worker reported those regressions RED on original source; parent verified the fixed full suite, server gates and real integration above.
+
+Parent rebuilt and reinstalled that source APK. The actual add dialog now shows `Assigned by server on submit`, not a client-clock date. A further +1 submission refreshed to5/10,5 remaining and three results, preserving both earlier notes. Inspected evidence: `evidence/shared-quantity-server-date.png` and `evidence/shared-quantity-postfix-result.png`. Revocation/account-switch recovery itself is established by widget regressions plus server integration, not a new multi-account GUI journey.
+
+Fresh independent review of exact source `c9e8cc3d33019656405debd2b6f7351c3141ca07` is pending. PR #10 remains unmerged until that review passes. Shared checklist/individual mode/edit-delete/admin UI, offline outbox/reconciliation/realtime, shared alarms/notification delivery, live Google OAuth, browser-cookie E2E and physical-device QA remain outside this slice. The broader shared-goal gate in #6 stays open.
