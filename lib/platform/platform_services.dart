@@ -20,7 +20,7 @@ class PlatformServices {
   final GoogleCalendarGateway googleCalendar;
 
   factory PlatformServices.current() {
-    if (defaultTargetPlatform == TargetPlatform.android) {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
       return PlatformServices(
         calendar: AndroidCalendarGateway(),
         widget: AndroidWidgetGateway(),

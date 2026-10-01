@@ -1,5 +1,6 @@
 import '../domain/countdown.dart';
 import '../domain/itstheday_event.dart';
+import '../domain/goal.dart';
 
 class GoogleCalendarAccount {
   const GoogleCalendarAccount({
@@ -110,6 +111,8 @@ abstract interface class GoogleCalendarGateway {
 abstract interface class WidgetGateway {
   Future<void> update(ItsTheDayEvent event, CountdownSnapshot snapshot);
 
+  Future<void> updateGoal(Goal goal, int daysRemaining);
+
   Future<void> clear();
 }
 
@@ -141,6 +144,9 @@ class UnsupportedWidgetGateway implements WidgetGateway {
 
   @override
   Future<void> update(ItsTheDayEvent event, CountdownSnapshot snapshot) async {}
+
+  @override
+  Future<void> updateGoal(Goal goal, int daysRemaining) async {}
 }
 
 class UnsupportedReminderGateway implements ReminderGateway {
