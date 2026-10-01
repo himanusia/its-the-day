@@ -17,13 +17,14 @@ function isRead(sql) {
 function setup(verifier = async (request) => ({
   // This is a test-only identity fixture. Production createApp() uses Better Auth.
   accountId: request.headers.get('authorization')?.replace(/^Bearer /, '') ?? '',
-})) {
+}), options = {}) {
   const sqlite = new DatabaseSync(':memory:');
   sqlite.exec(migration);
   const DB = {
     prepare(sql) {
       let values = [];
       const statement = {
+        sql,
         bind(...next) {
           values = next;
           return statement;
@@ -44,10 +45,13 @@ function setup(verifier = async (request) => ({
       return statement;
     },
     async batch(statements) {
+      if (options.beforeBatch) await options.beforeBatch(statements);
       sqlite.exec('BEGIN IMMEDIATE');
       try {
-        for (const statement of statements) await statement.all();
+        const results = [];
+        for (const statement of statements) results.push(await statement.all());
         sqlite.exec('COMMIT');
+        return results;
       } catch (error) {
         sqlite.exec('ROLLBACK');
         throw error;
@@ -180,6 +184,117 @@ test('individual quantity and checklist totals are actor-scoped', async () => {
   assert.equal((await call('bob', 'GET', `/api/goals/${checklist.id}`)).body.total, 1);
   await call('bob', 'PUT', `/api/goals/${checklist.id}/items/${item.id}/check`, { checked: false }, 'bob-uncheck');
   assert.equal((await call('bob', 'GET', `/api/goals/${checklist.id}`)).body.total, 0);
+});
+
+test('rotated invite allows an explicitly re-invited revoked member to rejoin', async () => {
+  const { call } = setup();
+  const group = await createGroup(call);
+  assert.equal((await call('bob', 'POST', '/api/groups/join', { code: group.joinCode }, 'initial-join')).status, 200);
+  await call('alice', 'POST', `/api/groups/${group.id}/revoke/bob`, {}, 'revoke');
+  const rotated = await call('alice', 'POST', `/api/groups/${group.id}/invite/revoke`, {}, 'rotate');
+  assert.equal(rotated.status, 200);
+  const rejoin = await call('bob', 'POST', '/api/groups/join', { code: rotated.body.joinCode }, 'rejoin');
+  assert.equal(rejoin.status, 200);
+  const members = await call('alice', 'GET', `/api/groups/${group.id}/members`);
+  assert.equal(members.body.members.some((m) => m.accountId === 'bob' && Number(m.active) === 1), true);
+});
+
+test('join rejects a stale code when invite rotation wins the mutation race', async () => {
+  let rotate;
+  const { call } = setup(undefined, {
+    beforeBatch: async (statements) => {
+      if (
+        rotate &&
+        statements.some((statement) => statement.sql.includes('INSERT INTO memberships'))
+      ) {
+        const run = rotate;
+        rotate = null;
+        await run();
+      }
+    },
+  });
+  const group = await createGroup(call);
+  rotate = () => call('alice', 'POST', `/api/groups/${group.id}/invite/revoke`, {}, 'rotate-join');
+
+  const result = await call(
+    'bob',
+    'POST',
+    '/api/groups/join',
+    { code: group.joinCode },
+    'join-rotation-race',
+  );
+  assert.equal(result.status, 409);
+  assert.deepEqual(result.body, { error: 'mutation_conflict' });
+  assert.equal(
+    (await call('alice', 'GET', `/api/groups/${group.id}/members`)).body.members.some(
+      (member) => member.accountId === 'bob' && Number(member.active) === 1,
+    ),
+    false,
+  );
+});
+
+test('check mutation rejects a membership revoked after the visibility precheck', async () => {
+  let revoke;
+  const { call } = setup(undefined, {
+    beforeBatch: async (statements) => {
+      if (revoke && statements.some((statement) => statement.sql.includes('INSERT INTO checklist_checks'))) {
+        const run = revoke;
+        revoke = null;
+        await run();
+      }
+    },
+  });
+  const group = await createGroup(call);
+  await call('bob', 'POST', '/api/groups/join', { code: group.joinCode }, 'check-race-join');
+  const goal = (
+    await call('alice', 'POST', '/api/goals', { ...quantityGoal(group.id), kind: 'checklist', unit: '', target: 1 }, 'check-race-goal')
+  ).body;
+  const item = (await call('alice', 'POST', `/api/goals/${goal.id}/items`, { title: 'First' }, 'check-race-item')).body;
+  revoke = () => call('alice', 'POST', `/api/groups/${group.id}/revoke/bob`, {}, 'revoke-check-race');
+
+  const result = await call(
+    'bob',
+    'PUT',
+    `/api/goals/${goal.id}/items/${item.id}/check`,
+    { checked: true },
+    'check-membership-race',
+  );
+  assert.equal(result.status, 409);
+  assert.deepEqual(result.body, { error: 'mutation_conflict' });
+  const visible = await call('alice', 'GET', `/api/goals/${goal.id}`);
+  assert.equal(visible.body.total, 0);
+  assert.equal(visible.body.checks.length, 0);
+});
+
+test('progress deletion rejects a membership revoked after the visibility precheck', async () => {
+  let revoke;
+  const { call } = setup(undefined, {
+    beforeBatch: async (statements) => {
+      if (revoke && statements.some((statement) => statement.sql.includes('UPDATE progress SET deleted_at'))) {
+        const run = revoke;
+        revoke = null;
+        await run();
+      }
+    },
+  });
+  const group = await createGroup(call);
+  await call('bob', 'POST', '/api/groups/join', { code: group.joinCode }, 'delete-race-join');
+  const goal = (await call('alice', 'POST', '/api/goals', quantityGoal(group.id), 'delete-race-goal')).body;
+  const progress = (await call('bob', 'POST', `/api/goals/${goal.id}/progress`, { amount: 3 }, 'delete-race-progress')).body;
+  revoke = () => call('alice', 'POST', `/api/groups/${group.id}/revoke/bob`, {}, 'revoke-delete-race');
+
+  const result = await call(
+    'bob',
+    'DELETE',
+    `/api/goals/${goal.id}/progress/${progress.id}`,
+    {},
+    'delete-membership-race',
+  );
+  assert.equal(result.status, 409);
+  assert.deepEqual(result.body, { error: 'mutation_conflict' });
+  const visible = await call('alice', 'GET', `/api/goals/${goal.id}`);
+  assert.equal(visible.body.total, 3);
+  assert.equal(visible.body.progress.length, 1);
 });
 
 test('strict input validation and idempotency binding', async () => {

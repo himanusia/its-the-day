@@ -5,7 +5,8 @@ import type { BetterAuthOptions, D1Database } from 'better-auth';
 import { bearer } from 'better-auth/plugins';
 
 type Row = Record<string, unknown>;
-type D1Result<T> = { results: T[]; meta?: Record<string, unknown> };
+type D1Meta = Record<string, unknown> & { changes?: number };
+type D1Result<T> = { results: T[]; meta?: D1Meta };
 
 /**
  * A small common surface shared by the real Cloudflare D1 binding and the
@@ -21,7 +22,7 @@ export interface Statement {
 
 export interface Database {
   prepare(sql: string): Statement;
-  batch?(statements: Statement[]): Promise<unknown>;
+  batch?(statements: Statement[]): Promise<D1Result<unknown>[]>;
   exec?(sql: string): Promise<unknown>;
 }
 
@@ -71,7 +72,7 @@ type BetterAuthLike = {
   };
 };
 type AppOptions = { sessionVerifier?: SessionVerifier };
-type MutationStatement = { sql: string; args: unknown[] };
+type MutationStatement = { sql: string; args: unknown[]; required?: boolean };
 type OperationBinding = { method: string; path: string; bodyHash: string };
 type StoredMutation = { body: unknown; status: number; replay: boolean };
 
@@ -209,19 +210,20 @@ async function run(
 async function atomicBatch(
   db: Database,
   statements: MutationStatement[],
-): Promise<void> {
+): Promise<D1Result<unknown>[]> {
   if (db.batch) {
-    await db.batch(
+    return db.batch(
       statements.map(({ sql, args }) => db.prepare(sql).bind(...args)),
     );
-    return;
   }
   // Real D1 always supplies batch(). This fallback keeps a small injected
   // adapter usable for read/authorization tests, but is never the Workers
   // production path and is intentionally documented as non-atomic.
+  const results: D1Result<unknown>[] = [];
   for (const statement of statements) {
-    await run(db, statement.sql, ...statement.args);
+    results.push(await db.prepare(statement.sql).bind(...statement.args).all());
   }
+  return results;
 }
 
 async function readBody(c: AppContext): Promise<Record<string, unknown> | null> {
@@ -388,6 +390,7 @@ async function idempotentMutation(
   }
 
   const response = jsonString(responseBody);
+  const conflictResponse = jsonString({ error: 'mutation_conflict' });
   const reservation: MutationStatement = {
     sql: `INSERT OR IGNORE INTO idempotency
       (actor_id,key,method,path,body_hash,response,response_status,completed,created_at)
@@ -402,10 +405,34 @@ async function idempotentMutation(
       now(),
     ],
   };
-  const completion: MutationStatement = {
+  const batch: MutationStatement[] = [reservation];
+  const requiredPositions: number[] = [];
+  for (const mutation of mutationStatements) {
+    const required = mutation.required !== false;
+    const mutationPosition = batch.length;
+    batch.push(mutation);
+    if (!required) continue;
+    requiredPositions.push(mutationPosition);
+    // D1 batch() is atomic, so a zero-row required mutation must select the
+    // conflict completion below before the idempotency row can be completed.
+    batch.push({
+      sql: `UPDATE idempotency SET response=CASE
+          WHEN response='__mutation_failed__' THEN '__mutation_failed__'
+          WHEN changes() > 0 THEN '__mutation_succeeded__'
+          ELSE '__mutation_failed__'
+        END
+        WHERE actor_id=? AND key=? AND method=? AND path=? AND body_hash=? AND completed=0`,
+      args: reservationArgs(actorId, key, binding),
+    });
+  }
+  const completionState = requiredPositions.length > 0
+    ? '__mutation_succeeded__'
+    : '__pending__';
+  batch.push({
     sql: `UPDATE idempotency
       SET response=?,response_status=?,completed=1
-      WHERE actor_id=? AND key=? AND method=? AND path=? AND body_hash=? AND completed=0`,
+      WHERE actor_id=? AND key=? AND method=? AND path=? AND body_hash=?
+        AND completed=0 AND response=?`,
     args: [
       response,
       responseStatus,
@@ -414,9 +441,30 @@ async function idempotentMutation(
       binding.method,
       binding.path,
       binding.bodyHash,
+      completionState,
     ],
-  };
-  await atomicBatch(db, [reservation, ...mutationStatements, completion]);
+  });
+  batch.push({
+    sql: `UPDATE idempotency
+      SET response=?,response_status=409,completed=1
+      WHERE actor_id=? AND key=? AND method=? AND path=? AND body_hash=?
+        AND completed=0 AND response='__mutation_failed__'`,
+    args: [
+      conflictResponse,
+      actorId,
+      key,
+      binding.method,
+      binding.path,
+      binding.bodyHash,
+    ],
+  });
+  const batchResults = await atomicBatch(db, batch);
+  const changed = (result: D1Result<unknown> | undefined) =>
+    Number(result?.meta?.changes ?? 0);
+  const reserved = changed(batchResults[0]) === 1;
+  const requiredSucceeded = requiredPositions.every(
+    (position) => changed(batchResults[position]) > 0,
+  );
 
   const stored = await first<Row>(
     db,
@@ -434,10 +482,14 @@ async function idempotentMutation(
   ) {
     return reply(c, { error: 'idempotency_key_conflict' }, 409);
   }
+  const storedResponse = String(stored.response);
+  if (reserved && !requiredSucceeded && storedResponse === response) {
+    return reply(c, { error: 'mutation_conflict' }, 409);
+  }
   return {
-    body: JSON.parse(String(stored.response)),
+    body: JSON.parse(storedResponse),
     status: Number(stored.responseStatus ?? 200),
-    replay: String(stored.response) !== response,
+    replay: !reserved && storedResponse !== response,
   };
 }
 
@@ -800,20 +852,36 @@ export function createApp(
       200,
       [
         {
-          sql: `UPDATE memberships SET active=1,joined_at=?,revoked_at=NULL,
-              revoked_join_code=NULL
-            WHERE group_id=? AND account_id=? AND role='member'
-              AND (revoked_at IS NULL OR revoked_join_code<>?) AND ${reserve}`,
-          args: [joinedAt, group.id, actorId, group.joinCode, ...args],
-        },
-        {
-          sql: `INSERT OR IGNORE INTO memberships
+          sql: `INSERT INTO memberships
               (group_id,account_id,role,active,joined_at)
-            SELECT ?,?,'member',1,? WHERE ${reserve}
-              AND NOT EXISTS (
-                SELECT 1 FROM memberships WHERE group_id=? AND account_id=?
+            SELECT ?,?,'member',1,?
+            WHERE ${reserve}
+              AND EXISTS (
+                SELECT 1 FROM groups currentGroup
+                WHERE currentGroup.id=? AND currentGroup.join_code=?
+              )
+            ON CONFLICT(group_id,account_id) DO UPDATE SET
+              active=1,joined_at=?,revoked_at=NULL,revoked_join_code=NULL
+            WHERE ${reserve}
+              AND memberships.role='member'
+              AND (memberships.revoked_at IS NULL OR memberships.revoked_join_code<>?)
+              AND EXISTS (
+                SELECT 1 FROM groups currentGroup
+                WHERE currentGroup.id=? AND currentGroup.join_code=?
               )`,
-          args: [group.id, actorId, joinedAt, ...args, group.id, actorId],
+          args: [
+            group.id,
+            actorId,
+            joinedAt,
+            ...args,
+            group.id,
+            group.joinCode,
+            joinedAt,
+            ...args,
+            group.joinCode,
+            group.id,
+            group.joinCode,
+          ],
         },
       ],
     );
@@ -1421,8 +1489,16 @@ export function createApp(
       [
         {
           sql: `UPDATE progress SET deleted_at=?
-            WHERE id=? AND goal_id=? AND actor_id=? AND deleted_at IS NULL AND ${reserve}`,
-          args: [now(), current.id, goal.id, actorId, ...args],
+            WHERE id=? AND goal_id=? AND actor_id=? AND deleted_at IS NULL AND ${reserve}
+              AND EXISTS (
+                SELECT 1 FROM goals g WHERE g.id=progress.goal_id AND g.deleted_at IS NULL
+                  AND (g.visibility='private' AND g.owner_id=? OR
+                    g.visibility='shared' AND EXISTS (
+                      SELECT 1 FROM memberships m WHERE m.group_id=g.group_id
+                        AND m.account_id=? AND m.active=1
+                    ))
+              )`,
+          args: [now(), current.id, goal.id, actorId, ...args, actorId, actorId],
         },
       ],
     );
@@ -1651,18 +1727,49 @@ export function createApp(
       200,
       [
         {
-          sql: `UPDATE checklist_checks SET checked=?,changed_at=?
-            WHERE item_id=? AND actor_id=? AND ${reserve}
-              AND EXISTS (SELECT 1 FROM checklist_items WHERE id=? AND deleted_at IS NULL)`,
-          args: [body.checked ? 1 : 0, at, item.id, actorId, ...args, item.id],
-        },
-        {
-          sql: `INSERT OR IGNORE INTO checklist_checks(item_id,actor_id,checked,changed_at)
+          sql: `INSERT INTO checklist_checks(item_id,actor_id,checked,changed_at)
             SELECT ?,?,?,? WHERE ${reserve}
-              AND NOT EXISTS (
-                SELECT 1 FROM checklist_checks WHERE item_id=? AND actor_id=?
+              AND EXISTS (
+                SELECT 1 FROM checklist_items i
+                JOIN goals g ON g.id=i.goal_id
+                WHERE i.id=? AND i.goal_id=? AND i.deleted_at IS NULL
+                  AND g.deleted_at IS NULL AND g.kind='checklist'
+                  AND (g.visibility='private' AND g.owner_id=? OR
+                    g.visibility='shared' AND EXISTS (
+                      SELECT 1 FROM memberships m WHERE m.group_id=g.group_id
+                        AND m.account_id=? AND m.active=1
+                    ))
+              )
+            ON CONFLICT(item_id,actor_id) DO UPDATE SET
+              checked=excluded.checked,changed_at=excluded.changed_at
+            WHERE ${reserve}
+              AND EXISTS (
+                SELECT 1 FROM checklist_items i
+                JOIN goals g ON g.id=i.goal_id
+                WHERE i.id=? AND i.goal_id=? AND i.deleted_at IS NULL
+                  AND g.deleted_at IS NULL AND g.kind='checklist'
+                  AND (g.visibility='private' AND g.owner_id=? OR
+                    g.visibility='shared' AND EXISTS (
+                      SELECT 1 FROM memberships m WHERE m.group_id=g.group_id
+                        AND m.account_id=? AND m.active=1
+                    ))
               )`,
-          args: [item.id, actorId, body.checked ? 1 : 0, at, ...args, item.id, actorId],
+          args: [
+            item.id,
+            actorId,
+            body.checked ? 1 : 0,
+            at,
+            ...args,
+            item.id,
+            goal.id,
+            actorId,
+            actorId,
+            ...args,
+            item.id,
+            goal.id,
+            actorId,
+            actorId,
+          ],
         },
       ],
     );
