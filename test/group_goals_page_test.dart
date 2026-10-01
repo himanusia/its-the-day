@@ -10,6 +10,7 @@ import 'package:its_the_day/data/groups_api.dart';
 import 'package:its_the_day/presentation/group_goals_page.dart';
 import 'package:its_the_day/presentation/group_members_page.dart';
 import 'package:its_the_day/presentation/itstheday_theme.dart';
+import 'package:its_the_day/presentation/playful_widgets.dart';
 
 class _MemoryTokenStore implements SessionTokenStore {
   String? token = 'session-token';
@@ -291,6 +292,149 @@ void main() {
         ),
         hasLength(2),
       );
+    },
+  );
+
+  testWidgets(
+    'keeps create recovery actions disabled until the parent refresh completes',
+    (tester) async {
+      final recoveryGet = Completer<http.Response>();
+      final client = _QueueClient([
+        (_) => _json({
+          'goals': [_goal(title: 'Old account goal')],
+          'state': 'online',
+        }, 200),
+        (_) => _json({'error': 'unauthorized'}, 401),
+        (_) => _json({'auth': 'better_auth', 'google': 'setup_needed'}, 200),
+        (_) => _json({'state': 'online', 'email': 'new@example.test'}, 200),
+        (_) => recoveryGet.future,
+        (_) =>
+            _json(_goal(id: 'goal-2', title: 'Draft goal', unit: 'times'), 201),
+        (_) => _json({
+          'goals': [_goal(title: 'Final account goal')],
+          'state': 'online',
+        }, 200),
+      ]);
+      List<http.Request> createPosts() => client.requests
+          .where(
+            (request) =>
+                request.method == 'POST' && request.url.path == '/api/goals',
+          )
+          .cast<http.Request>()
+          .toList();
+
+      await tester.pumpWidget(_groupGoalsPage(_api(client)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('create-shared-goal-action')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('shared-goal-title-field')),
+        'Draft goal',
+      );
+      await tester.tap(find.byKey(const ValueKey('shared-goal-submit')));
+      await tester.pumpAndSettle();
+
+      final firstPost = createPosts().single;
+      final operationKey = firstPost.headers['idempotency-key'];
+      expect(operationKey, isNotEmpty);
+
+      await tester.tap(find.byKey(const ValueKey('shared-goal-reauth')));
+      await tester.pumpAndSettle();
+      expect(find.text('Signed in'), findsOneWidget);
+      await tester.tap(find.byTooltip('Back'));
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(recoveryGet.isCompleted, isFalse);
+      expect(
+        client.requests.where(
+          (request) =>
+              request.method == 'GET' && request.url.path == '/api/goals',
+        ),
+        hasLength(2),
+      );
+      expect(
+        tester
+            .widget<PlayfulButton>(
+              find.byKey(const ValueKey('shared-goal-submit')),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(
+        tester
+            .widget<TextButton>(find.widgetWithText(TextButton, 'Cancel'))
+            .onPressed,
+        isNull,
+      );
+      expect(
+        tester
+            .widget<TextButton>(
+              find.byKey(const ValueKey('shared-goal-reauth')),
+            )
+            .onPressed,
+        isNull,
+      );
+
+      await tester.tap(find.byKey(const ValueKey('shared-goal-submit')));
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.tap(find.byKey(const ValueKey('shared-goal-reauth')));
+      await tester.pump();
+      expect(createPosts(), hasLength(1));
+      expect(find.byKey(const ValueKey('shared-goal-reauth')), findsOneWidget);
+
+      recoveryGet.complete(
+        await _json({
+          'goals': [_goal(title: 'Recovered account goal')],
+          'state': 'online',
+        }, 200),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .widget<PlayfulButton>(
+              find.byKey(const ValueKey('shared-goal-submit')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+      expect(
+        tester
+            .widget<TextButton>(find.widgetWithText(TextButton, 'Cancel'))
+            .onPressed,
+        isNotNull,
+      );
+      expect(
+        tester
+            .widget<TextButton>(
+              find.byKey(const ValueKey('shared-goal-reauth')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+      expect(
+        tester
+            .widget<TextFormField>(
+              find.byKey(const ValueKey('shared-goal-title-field')),
+            )
+            .controller!
+            .text,
+        'Draft goal',
+      );
+
+      await tester.tap(find.byKey(const ValueKey('shared-goal-submit')));
+      await tester.pumpAndSettle();
+
+      final posts = createPosts();
+      expect(posts, hasLength(2));
+      expect(posts[1].headers['idempotency-key'], operationKey);
+      final body = jsonDecode(posts[1].body) as Map<String, dynamic>;
+      expect(body['groupId'], 'group-1');
+      expect(body['title'], 'Draft goal');
+      expect(body['target'], 10);
+      expect(body['unit'], 'times');
+      expect(find.text('Final account goal'), findsOneWidget);
+      expect(find.text('Recovered account goal'), findsNothing);
     },
   );
 

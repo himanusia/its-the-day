@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:its_the_day/data/groups_api.dart';
 import 'package:its_the_day/presentation/itstheday_theme.dart';
 import 'package:its_the_day/presentation/online_quantity_goal_page.dart';
+import 'package:its_the_day/presentation/playful_widgets.dart';
 
 class _MemoryTokenStore implements SessionTokenStore {
   String? token = 'session-token';
@@ -242,6 +244,173 @@ void main() {
         'note': 'Keep this draft',
       });
       expect(find.text('6 / 10 pages'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'keeps add recovery actions disabled until the parent refresh completes',
+    (tester) async {
+      final recoveryGet = Completer<http.Response>();
+      final client = _QueueClient([
+        (_) => _json(_detail(total: 4, note: 'Old account result'), 200),
+        (_) => _json({'error': 'unauthorized'}, 401),
+        (_) => _json({'auth': 'better_auth', 'google': 'setup_needed'}, 200),
+        (_) => _json({'state': 'online', 'email': 'new@example.test'}, 200),
+        (_) => recoveryGet.future,
+        (_) => _json({
+          'id': 'result-2',
+          'goalId': 'goal-1',
+          'actorId': 'member-account-id',
+          'amount': 2,
+          'note': 'Keep this draft',
+          'occurredAt': '2026-10-02T18:00:00.000Z',
+          'createdAt': '2026-10-02T18:00:00.000Z',
+          'state': 'online',
+        }, 201),
+        (_) =>
+            _json(_detail(total: 10, note: 'Final authoritative result'), 200),
+      ]);
+      List<http.Request> progressPosts() => client.requests
+          .where(
+            (request) =>
+                request.method == 'POST' &&
+                request.url.path == '/api/goals/goal-1/progress',
+          )
+          .cast<http.Request>()
+          .toList();
+
+      await tester.pumpWidget(_page(_api(client)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('online-add-result-action')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('online-result-amount-field')),
+        '2',
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey('online-result-note-field')),
+        'Keep this draft',
+      );
+      await tester.tap(find.byKey(const ValueKey('online-result-submit')));
+      await tester.pumpAndSettle();
+
+      final firstPost = progressPosts().single;
+      final operationKey = firstPost.headers['idempotency-key'];
+      expect(operationKey, isNotEmpty);
+
+      await tester.tap(find.byKey(const ValueKey('online-result-reauth')));
+      await tester.pumpAndSettle();
+      expect(find.text('Signed in'), findsOneWidget);
+      await tester.tap(find.byTooltip('Back'));
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(recoveryGet.isCompleted, isFalse);
+      expect(
+        client.requests.where(
+          (request) =>
+              request.method == 'GET' &&
+              request.url.path == '/api/goals/goal-1',
+        ),
+        hasLength(2),
+      );
+      expect(
+        tester
+            .widget<PlayfulButton>(
+              find.byKey(const ValueKey('online-result-submit')),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(
+        tester
+            .widget<TextButton>(find.widgetWithText(TextButton, 'Cancel'))
+            .onPressed,
+        isNull,
+      );
+      expect(
+        tester
+            .widget<TextButton>(
+              find.byKey(const ValueKey('online-result-reauth')),
+            )
+            .onPressed,
+        isNull,
+      );
+
+      await tester.tap(find.byKey(const ValueKey('online-result-submit')));
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.tap(find.byKey(const ValueKey('online-result-reauth')));
+      await tester.pump();
+      expect(progressPosts(), hasLength(1));
+      expect(
+        find.byKey(const ValueKey('online-result-reauth')),
+        findsOneWidget,
+      );
+
+      recoveryGet.complete(
+        await _json(
+          _detail(total: 8, note: 'Recovered authoritative result'),
+          200,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .widget<PlayfulButton>(
+              find.byKey(const ValueKey('online-result-submit')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+      expect(
+        tester
+            .widget<TextButton>(find.widgetWithText(TextButton, 'Cancel'))
+            .onPressed,
+        isNotNull,
+      );
+      expect(
+        tester
+            .widget<TextButton>(
+              find.byKey(const ValueKey('online-result-reauth')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+      expect(
+        tester
+            .widget<TextFormField>(
+              find.byKey(const ValueKey('online-result-amount-field')),
+            )
+            .controller!
+            .text,
+        '2',
+      );
+      expect(
+        tester
+            .widget<TextFormField>(
+              find.byKey(const ValueKey('online-result-note-field')),
+            )
+            .controller!
+            .text,
+        'Keep this draft',
+      );
+
+      await tester.tap(find.byKey(const ValueKey('online-result-submit')));
+      await tester.pumpAndSettle();
+
+      final posts = progressPosts();
+      expect(posts, hasLength(2));
+      expect(posts[1].headers['idempotency-key'], operationKey);
+      expect(jsonDecode(posts[1].body), {
+        'amount': 2,
+        'note': 'Keep this draft',
+      });
+      expect(find.text('10 / 10 pages'), findsOneWidget);
+      expect(find.textContaining('Final authoritative result'), findsOneWidget);
+      expect(
+        find.textContaining('Recovered authoritative result'),
+        findsNothing,
+      );
     },
   );
 

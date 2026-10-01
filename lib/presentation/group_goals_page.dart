@@ -413,6 +413,7 @@ class _SharedQuantityGoalDialogState extends State<_SharedQuantityGoalDialog> {
   String? _error;
   bool _authExpired = false;
   bool _submitting = false;
+  bool _recoveryBusy = false;
 
   @override
   void dispose() {
@@ -424,6 +425,7 @@ class _SharedQuantityGoalDialogState extends State<_SharedQuantityGoalDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final dialogBusy = _submitting || _recoveryBusy;
     return AlertDialog(
       title: const Text('New shared goal'),
       content: Form(
@@ -438,7 +440,7 @@ class _SharedQuantityGoalDialogState extends State<_SharedQuantityGoalDialog> {
               TextFormField(
                 key: const ValueKey('shared-goal-title-field'),
                 controller: _title,
-                enabled: !_submitting,
+                enabled: !dialogBusy,
                 autofocus: true,
                 textInputAction: TextInputAction.next,
                 decoration: const InputDecoration(labelText: 'Goal title'),
@@ -449,7 +451,7 @@ class _SharedQuantityGoalDialogState extends State<_SharedQuantityGoalDialog> {
               TextFormField(
                 key: const ValueKey('shared-goal-target-field'),
                 controller: _target,
-                enabled: !_submitting,
+                enabled: !dialogBusy,
                 keyboardType: TextInputType.number,
                 textInputAction: TextInputAction.next,
                 decoration: const InputDecoration(labelText: 'Target'),
@@ -462,7 +464,7 @@ class _SharedQuantityGoalDialogState extends State<_SharedQuantityGoalDialog> {
               TextFormField(
                 key: const ValueKey('shared-goal-unit-field'),
                 controller: _unit,
-                enabled: !_submitting,
+                enabled: !dialogBusy,
                 textInputAction: TextInputAction.done,
                 decoration: const InputDecoration(labelText: 'Unit'),
                 validator: (value) =>
@@ -473,7 +475,7 @@ class _SharedQuantityGoalDialogState extends State<_SharedQuantityGoalDialog> {
                 key: const ValueKey('shared-goal-deadline'),
                 icon: Icons.event_rounded,
                 tone: PlayfulButtonTone.secondary,
-                onPressed: _submitting ? null : _pickDeadline,
+                onPressed: dialogBusy ? null : _pickDeadline,
                 label: Text(
                   'Deadline · ${DateFormat.yMMMd().format(_deadline)}',
                 ),
@@ -493,16 +495,16 @@ class _SharedQuantityGoalDialogState extends State<_SharedQuantityGoalDialog> {
         if (_authExpired)
           TextButton(
             key: const ValueKey('shared-goal-reauth'),
-            onPressed: _submitting ? null : _openAccount,
+            onPressed: dialogBusy ? null : _openAccount,
             child: const Text('Open account'),
           ),
         TextButton(
-          onPressed: _submitting ? null : () => Navigator.pop(context),
+          onPressed: dialogBusy ? null : () => Navigator.pop(context),
           child: const Text('Cancel'),
         ),
         PlayfulButton(
           key: const ValueKey('shared-goal-submit'),
-          onPressed: _submitting ? null : _submit,
+          onPressed: dialogBusy ? null : _submit,
           child: Text(_submitting ? 'Creating…' : 'Create goal'),
         ),
       ],
@@ -523,18 +525,28 @@ class _SharedQuantityGoalDialogState extends State<_SharedQuantityGoalDialog> {
   }
 
   Future<void> _openAccount() async {
-    widget.onAccountRecoveryStart?.call();
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => AccountPage(api: widget.api.api)),
-    );
-    if (!mounted) return;
-    final onComplete = widget.onAccountRecoveryComplete;
-    if (onComplete != null) await onComplete();
+    if (_submitting || _recoveryBusy) return;
+    setState(() => _recoveryBusy = true);
+    try {
+      widget.onAccountRecoveryStart?.call();
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => AccountPage(api: widget.api.api)),
+      );
+      if (!mounted) return;
+      final onComplete = widget.onAccountRecoveryComplete;
+      if (onComplete != null) await onComplete();
+    } finally {
+      if (mounted) setState(() => _recoveryBusy = false);
+    }
   }
 
   Future<void> _submit() async {
-    if (_submitting || !(_formKey.currentState?.validate() ?? false)) return;
+    if (_submitting ||
+        _recoveryBusy ||
+        !(_formKey.currentState?.validate() ?? false)) {
+      return;
+    }
     final title = _title.text.trim();
     final target = int.parse(_target.text.trim());
     final unit = _unit.text.trim();

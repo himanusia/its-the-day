@@ -476,6 +476,7 @@ class _AddQuantityResultDialogState extends State<_AddQuantityResultDialog> {
   String? _error;
   bool _authExpired = false;
   bool _submitting = false;
+  bool _recoveryBusy = false;
 
   @override
   void dispose() {
@@ -486,6 +487,7 @@ class _AddQuantityResultDialogState extends State<_AddQuantityResultDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final dialogBusy = _submitting || _recoveryBusy;
     return AlertDialog(
       title: const Text('Add result'),
       content: Form(
@@ -498,7 +500,7 @@ class _AddQuantityResultDialogState extends State<_AddQuantityResultDialog> {
               TextFormField(
                 key: const ValueKey('online-result-amount-field'),
                 controller: _amount,
-                enabled: !_submitting,
+                enabled: !dialogBusy,
                 autofocus: true,
                 keyboardType: TextInputType.number,
                 textInputAction: TextInputAction.next,
@@ -512,7 +514,7 @@ class _AddQuantityResultDialogState extends State<_AddQuantityResultDialog> {
               TextFormField(
                 key: const ValueKey('online-result-note-field'),
                 controller: _note,
-                enabled: !_submitting,
+                enabled: !dialogBusy,
                 maxLines: 3,
                 textInputAction: TextInputAction.newline,
                 decoration: const InputDecoration(
@@ -544,16 +546,16 @@ class _AddQuantityResultDialogState extends State<_AddQuantityResultDialog> {
         if (_authExpired)
           TextButton(
             key: const ValueKey('online-result-reauth'),
-            onPressed: _submitting ? null : _openAccount,
+            onPressed: dialogBusy ? null : _openAccount,
             child: const Text('Open account'),
           ),
         TextButton(
-          onPressed: _submitting ? null : () => Navigator.pop(context),
+          onPressed: dialogBusy ? null : () => Navigator.pop(context),
           child: const Text('Cancel'),
         ),
         PlayfulButton(
           key: const ValueKey('online-result-submit'),
-          onPressed: _submitting ? null : _submit,
+          onPressed: dialogBusy ? null : _submit,
           child: Text(_submitting ? 'Adding…' : 'Add result'),
         ),
       ],
@@ -561,18 +563,28 @@ class _AddQuantityResultDialogState extends State<_AddQuantityResultDialog> {
   }
 
   Future<void> _openAccount() async {
-    widget.onAccountRecoveryStart?.call();
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => AccountPage(api: widget.api.api)),
-    );
-    if (!mounted) return;
-    final onComplete = widget.onAccountRecoveryComplete;
-    if (onComplete != null) await onComplete();
+    if (_submitting || _recoveryBusy) return;
+    setState(() => _recoveryBusy = true);
+    try {
+      widget.onAccountRecoveryStart?.call();
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => AccountPage(api: widget.api.api)),
+      );
+      if (!mounted) return;
+      final onComplete = widget.onAccountRecoveryComplete;
+      if (onComplete != null) await onComplete();
+    } finally {
+      if (mounted) setState(() => _recoveryBusy = false);
+    }
   }
 
   Future<void> _submit() async {
-    if (_submitting || !(_formKey.currentState?.validate() ?? false)) return;
+    if (_submitting ||
+        _recoveryBusy ||
+        !(_formKey.currentState?.validate() ?? false)) {
+      return;
+    }
     final amount = int.parse(_amount.text.trim());
     final note = _note.text.trim();
     final operationId = _operation.forPayload({'amount': amount, 'note': note});
