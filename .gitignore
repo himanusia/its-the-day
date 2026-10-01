@@ -59,3 +59,10 @@ app.*.map.json
 android/key.properties
 android/app/google-services.json
 ios/Runner/GoogleService-Info.plist
+
+# Local Worker dependencies, state, and secrets
+**/node_modules/
+**/.wrangler/
+.dev.vars
+.dev.vars.*
+**/__pycache__/
