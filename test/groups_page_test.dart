@@ -80,6 +80,51 @@ Map<String, Object?> _group({
 };
 
 void main() {
+  testWidgets(
+    'expired mutation session opens account without losing draft or key',
+    (tester) async {
+      final client = _QueueClient([
+        (_) => _json({'groups': <Object?>[]}, 200),
+        (_) => _json({'error': 'unauthorized'}, 401),
+        (_) => _json({'auth': 'better_auth', 'google': 'setup_needed'}, 200),
+        (_) => _json({
+          'email': 'fixture@example.test',
+          'accountId': 'fixture',
+        }, 200),
+        (_) => _json({
+          'id': 'restored',
+          'name': 'Keep draft',
+          'role': 'owner',
+        }, 201),
+        (_) => _json({
+          'groups': [_group(id: 'restored', name: 'Keep draft')],
+        }, 200),
+      ]);
+      await tester.pumpWidget(_page(_api(client)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('create-group-action')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('group-name-field')),
+        'Keep draft',
+      );
+      await tester.tap(find.byKey(const ValueKey('create-group-submit')));
+      await tester.pumpAndSettle();
+      final key = client.requests[1].headers['idempotency-key'];
+      await tester.tap(find.byKey(const ValueKey('group-reauth')));
+      await tester.pumpAndSettle();
+      expect(find.text('Account'), findsOneWidget);
+      await tester.tap(find.byTooltip('Back'));
+      await tester.pumpAndSettle();
+      expect(find.text('Keep draft'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('create-group-submit')));
+      await tester.pumpAndSettle();
+      expect(client.requests[4].headers['idempotency-key'], key);
+      expect(find.text('Keep draft'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('lists groups, refreshes, and opens members without raw ids', (
     tester,
   ) async {

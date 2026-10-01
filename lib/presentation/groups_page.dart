@@ -394,6 +394,7 @@ class _GroupMutationDialogState extends State<_GroupMutationDialog> {
   final _value = TextEditingController();
   final _operation = StableOperationId();
   String? _error;
+  bool _authExpired = false;
   bool _submitting = false;
 
   @override
@@ -459,6 +460,12 @@ class _GroupMutationDialogState extends State<_GroupMutationDialog> {
         ),
       ),
       actions: [
+        if (_authExpired)
+          TextButton(
+            key: const ValueKey('group-reauth'),
+            onPressed: _submitting ? null : _openAccount,
+            child: const Text('Open account'),
+          ),
         TextButton(
           onPressed: _submitting ? null : () => Navigator.pop(context),
           child: const Text('Cancel'),
@@ -480,6 +487,15 @@ class _GroupMutationDialogState extends State<_GroupMutationDialog> {
     );
   }
 
+  Future<void> _openAccount() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => AccountPage(api: widget.api.api)),
+    );
+    // Keep the same dialog/controller/operation key beneath the account route.
+    // The next submit checks authentication; returning alone is not login proof.
+  }
+
   Future<void> _submit() async {
     if (_submitting || !(_formKey.currentState?.validate() ?? false)) return;
     final value = _value.text.trim();
@@ -495,7 +511,12 @@ class _GroupMutationDialogState extends State<_GroupMutationDialog> {
           : await widget.api.createGroup(value, operationId: operationId);
       if (mounted) Navigator.pop(context, result);
     } on Object catch (error) {
-      if (mounted) setState(() => _error = _safeMutationError(error));
+      if (mounted) {
+        setState(() {
+          _error = _safeMutationError(error);
+          _authExpired = error is GroupsSignedOut;
+        });
+      }
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
