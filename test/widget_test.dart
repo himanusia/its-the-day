@@ -31,9 +31,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text("IT'S THE DAY!"), findsOneWidget);
-    expect(find.text('Make time visible.'), findsOneWidget);
-    expect(find.text('Product launch'), findsNWidgets(2));
-    expect(find.text('D-4'), findsNWidgets(2));
+    expect(find.text('Make time visible.'), findsNothing);
+    expect(find.text('Product launch'), findsOneWidget);
+    expect(find.text('D-4'), findsOneWidget);
     expect(find.text('UPCOMING'), findsWidgets);
   });
 }

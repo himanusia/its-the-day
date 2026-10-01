@@ -1,0 +1,218 @@
+import 'package:flutter/material.dart';
+import '../data/groups_api.dart';
+import 'group_forms.dart';
+import 'group_goal_page.dart';
+import 'playful_widgets.dart';
+
+class GroupsPage extends StatefulWidget {
+  const GroupsPage({super.key,required this.api});
+  final GroupsApi api;
+  @override State<GroupsPage> createState()=>_GroupsPageState();
+}
+class _GroupsPageState extends State<GroupsPage> {
+  String state='loading',account='';
+  String? error;
+  bool busy=false;
+  List<Map<String,dynamic>> groups=[],goals=[];
+  @override void initState(){super.initState();load();}
+  @override void dispose(){widget.api.close();super.dispose();}
+  Future<void> load() async {
+    setState((){state='loading';error=null;});
+    try {
+      final session=await widget.api.request('GET','/api/session');
+      final result=await Future.wait([
+        widget.api.request('GET','/api/groups'),widget.api.request('GET','/api/goals')]);
+      if(mounted){setState((){
+        account='${session['accountId']}';groups=onlineRows(result[0]['groups']);
+        goals=onlineRows(result[1]['goals']);state='online';
+      });}
+    } on GroupsSignedOut {if(mounted){setState(()=>state='signed_out');}}
+    on GroupsSetupNeeded {if(mounted){setState(()=>state='setup_needed');}}
+    catch(e){if(mounted){setState((){state='error';error=onlineError(e);});}}
+  }
+  @override Widget build(BuildContext context)=>Scaffold(
+    appBar:AppBar(title:const Text('Together'),actions:[
+      if(state=='online') IconButton(tooltip:'Refresh',onPressed:busy ? null : load,icon:const Icon(Icons.refresh)),
+      if(state=='online') IconButton(tooltip:'Sign out',onPressed:busy ? null : signOut,icon:const Icon(Icons.logout)),
+    ]),body:Center(child:ConstrainedBox(constraints:const BoxConstraints(maxWidth:760),
+      child:ListView(padding:const EdgeInsets.all(20),children:[
+        if(state=='loading') const Center(child:CircularProgressIndicator()),
+        if(state=='signed_out') _AccountForm(api:widget.api,onSignedIn:load),
+        if(state=='setup_needed') const Card(child:Padding(padding:EdgeInsets.all(24),child:Column(
+          crossAxisAlignment:CrossAxisAlignment.start,children:[
+            Icon(Icons.settings_suggest_outlined,size:40),SizedBox(height:12),
+            Text('Groups need setup',style:TextStyle(fontSize:22,fontWeight:FontWeight.bold)),
+            SizedBox(height:8),Text('Connect this build to the configured server. Your local goals stay available.'),
+          ]))),
+        if(state=='error') Card(child:Padding(padding:const EdgeInsets.all(24),child:Column(children:[
+          const Icon(Icons.cloud_off_outlined,size:40),const SizedBox(height:12),
+          Text(error ?? 'Could not load groups'),const SizedBox(height:12),
+          PlayfulButton(onPressed:load,child:const Text('Try again')),
+        ]))),
+        if(state=='online') ...[
+          Text('Your groups',style:Theme.of(context).textTheme.headlineSmall),
+          const SizedBox(height:12),
+          for(final group in groups) Card(child:ListTile(
+            leading:const Icon(Icons.groups_rounded),title:Text('${group['name']}'),
+            subtitle:Text('${group['memberCount']} members · ${group['role']}'),
+            trailing:const Icon(Icons.chevron_right),onTap:()=>openGroup(group))),
+          if(groups.isEmpty) const Text('Create a group or join with an invite code.'),
+          const SizedBox(height:16),Wrap(spacing:12,runSpacing:12,children:[
+            PlayfulButton.icon(icon:Icons.group_add_rounded,label:const Text('Create group'),onPressed:()=>groupForm(false)),
+            PlayfulButton.icon(icon:Icons.login_rounded,label:const Text('Join group'),tone:PlayfulButtonTone.secondary,onPressed:()=>groupForm(true)),
+          ]),const SizedBox(height:28),
+          Text('Private online goals',style:Theme.of(context).textTheme.headlineSmall),
+          const SizedBox(height:10),const Text('Synced to your account. Separate from this device’s local goals.'),
+          const SizedBox(height:12),
+          for(final goal in goals.where((g)=>g['visibility']=='private')) goalTile(goal),
+          PlayfulButton.icon(icon:Icons.add_rounded,label:const Text('New private goal'),
+            onPressed:()=>newOnlineGoal(context,widget.api,account:account).then((_)=>load())),
+        ],
+      ]))));
+  Widget goalTile(Map<String,dynamic> goal)=>Card(child:ListTile(
+    leading:Icon(goal['kind']=='checklist' ? Icons.checklist_rounded : Icons.flag_rounded),
+    title:Text('${goal['title']}'),subtitle:Text('Due ${goal['deadline']}'),
+    onTap:() async {
+      await Navigator.push(context,MaterialPageRoute(builder:(_)=>GroupGoalPage(
+        api:widget.api,goalId:'${goal['id']}',accountId:account)));
+      if(mounted){await load();}
+    }));
+  Future<void> openGroup(Map<String,dynamic> group) async {
+    await Navigator.push(context,MaterialPageRoute(builder:(_)=>GroupDetailPage(
+      api:widget.api,group:group,accountId:account)));
+    if(mounted){await load();}
+  }
+  Future<void> groupForm(bool join) async {
+    final result=await onlineForm(context,title:join ? 'Join group' : 'Create group',
+      fields:[OnlineField(join ? 'code' : 'name',join ? 'Invite code' : 'Group name')],
+      submit:(v,k)=>widget.api.mutate('POST',join ? '/api/groups/join' : '/api/groups',body:v,operationId:k));
+    if(result!=null && mounted){await load();}
+  }
+  Future<void> signOut() async {
+    setState(()=>busy=true);
+    try {await widget.api.signOut();if(mounted){await load();}}
+    catch(e){if(mounted){ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(onlineError(e))));}}
+    finally{if(mounted){setState(()=>busy=false);}}
+  }
+}
+
+class _AccountForm extends StatefulWidget {
+  const _AccountForm({required this.api,required this.onSignedIn});
+  final GroupsApi api;
+  final Future<void> Function() onSignedIn;
+  @override State<_AccountForm> createState()=>_AccountFormState();
+}
+class _AccountFormState extends State<_AccountForm> {
+  final form=GlobalKey<FormState>();
+  final name=TextEditingController(),email=TextEditingController(),password=TextEditingController();
+  bool signup=false,busy=false;
+  String? error;
+  @override void dispose(){name.dispose();email.dispose();password.dispose();super.dispose();}
+  @override Widget build(BuildContext context)=>Card(child:Padding(padding:const EdgeInsets.all(24),
+    child:Form(key:form,child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+      const Icon(Icons.groups_rounded,size:48),const SizedBox(height:16),
+      Text(signup ? 'Create account' : 'Sign in',style:Theme.of(context).textTheme.headlineSmall),
+      const SizedBox(height:20),
+      if(signup) TextFormField(controller:name,enabled:!busy,decoration:const InputDecoration(labelText:'Name'),
+        validator:(v)=>(v ?? '').trim().isEmpty ? 'Required' : null),
+      const SizedBox(height:12),TextFormField(controller:email,enabled:!busy,autocorrect:false,
+        keyboardType:TextInputType.emailAddress,decoration:const InputDecoration(labelText:'Email'),
+        validator:(v)=>RegExp(r'^\S+@\S+\.\S+$').hasMatch((v ?? '').trim()) ? null : 'Enter an email'),
+      const SizedBox(height:12),TextFormField(controller:password,enabled:!busy,obscureText:true,
+        autocorrect:false,enableSuggestions:false,decoration:const InputDecoration(labelText:'Password'),
+        validator:(v)=>(v ?? '').length<8 ? 'At least 8 characters' : null),
+      if(error!=null) Padding(padding:const EdgeInsets.symmetric(vertical:12),
+        child:Text(error!,style:TextStyle(color:Theme.of(context).colorScheme.error))),
+      const SizedBox(height:20),PlayfulButton(onPressed:busy ? null : submit,
+        child:Text(busy ? 'Connecting…' : signup ? 'Create account' : 'Sign in')),
+      TextButton(onPressed:busy ? null : ()=>setState((){signup=!signup;error=null;}),
+        child:Text(signup ? 'Already have an account? Sign in' : 'Create an account')),
+    ]))));
+  Future<void> submit() async {
+    if(busy || !form.currentState!.validate()){return;}
+    setState((){busy=true;error=null;});
+    try {
+      if(signup){await widget.api.signUp(name.text.trim(),email.text.trim(),password.text);}
+      else{await widget.api.signIn(email.text.trim(),password.text);}
+      password.clear();await widget.onSignedIn();
+    }catch(e){if(mounted){setState(()=>error=onlineError(e));}}
+    finally{if(mounted){setState(()=>busy=false);}}
+  }
+}
+
+class GroupDetailPage extends StatefulWidget {
+  const GroupDetailPage({super.key,required this.api,required this.group,required this.accountId});
+  final GroupsApi api;
+  final Map<String,dynamic> group;
+  final String accountId;
+  @override State<GroupDetailPage> createState()=>_GroupDetailPageState();
+}
+class _GroupDetailPageState extends State<GroupDetailPage> {
+  List<Map<String,dynamic>> members=[],goals=[];
+  bool loading=true,busy=false;
+  String? error;
+  late String code='${widget.group['joinCode'] ?? ''}';
+  String get path=>'/api/groups/${Uri.encodeComponent('${widget.group['id']}')}';
+  bool get owner=>widget.group['role']=='owner';
+  @override void initState(){super.initState();load();}
+  Future<void> load() async {
+    try {
+      final result=await Future.wait([widget.api.request('GET','$path/members'),widget.api.request('GET','/api/goals')]);
+      if(mounted){setState((){
+        members=onlineRows(result[0]['members']);goals=onlineRows(result[1]['goals'])
+          .where((g)=>g['groupId']==widget.group['id']).toList();loading=false;error=null;
+      });}
+    }catch(e){if(mounted){setState((){error=onlineError(e);loading=false;});}}
+  }
+  @override Widget build(BuildContext context)=>Scaffold(appBar:AppBar(title:Text('${widget.group['name']}'),
+    actions:[IconButton(tooltip:'Refresh group',onPressed:busy ? null : load,icon:const Icon(Icons.refresh))]),
+    body:Center(child:ConstrainedBox(constraints:const BoxConstraints(maxWidth:760),child:ListView(
+      padding:const EdgeInsets.all(20),children:[
+        if(loading) const Center(child:CircularProgressIndicator()),
+        if(error!=null) Text(error!,style:TextStyle(color:Theme.of(context).colorScheme.error)),
+        if(!loading && error==null) ...[
+          if(owner) Card(child:Padding(padding:const EdgeInsets.all(20),child:Column(
+            crossAxisAlignment:CrossAxisAlignment.start,children:[
+              const Text('Invite code'),SelectableText(code,style:Theme.of(context).textTheme.headlineMedium),
+              TextButton(onPressed:busy ? null : rotateCode,child:const Text('Replace invite code')),
+            ]))),
+          Text('Goals',style:Theme.of(context).textTheme.headlineSmall),
+          for(final g in goals) Card(child:ListTile(leading:const Icon(Icons.flag_rounded),
+            title:Text('${g['title']}'),subtitle:Text('${g['targetMode']=='individual' ? 'Each member' : 'Together'} · Due ${g['deadline']}'),
+            onTap:() async {
+              await Navigator.push(context,MaterialPageRoute(builder:(_)=>GroupGoalPage(
+                api:widget.api,goalId:'${g['id']}',accountId:widget.accountId)));
+              if(mounted){await load();}
+            })),
+          PlayfulButton.icon(icon:Icons.add_rounded,label:const Text('New group goal'),onPressed:busy ? null : () async {
+            await newOnlineGoal(context,widget.api,account:widget.accountId,groupId:'${widget.group['id']}');
+            if(mounted){await load();}
+          }),const SizedBox(height:28),Text('Members',style:Theme.of(context).textTheme.headlineSmall),
+          for(final m in members.where((m)=>m['active']==1)) Card(child:ListTile(
+            leading:const Icon(Icons.person_outline),title:Text(m['accountId']==widget.accountId ? 'You' : 'Member'),
+            subtitle:Text('${m['role']} · ${m['accountId']}'),
+            trailing:owner && m['accountId']!=widget.accountId ? IconButton(tooltip:'Remove member',
+              icon:const Icon(Icons.person_remove_outlined),onPressed:busy ? null : ()=>remove(m)) : null)),
+          if(!owner) TextButton(onPressed:busy ? null : leave,child:const Text('Leave group')),
+        ]
+      ]))));
+  Future<void> run(Future<void> Function() operation) async {
+    if(busy){return;}setState(()=>busy=true);
+    try{await operation();}catch(e){if(mounted){ScaffoldMessenger.of(context)
+      .showSnackBar(SnackBar(content:Text(onlineError(e))));}}
+    finally{if(mounted){setState(()=>busy=false);}}
+  }
+  Future<void> rotateCode() async {
+    if(!await onlineConfirm(context,'Replace the invite code? The old code will stop working.')){return;}
+    await run(() async {final r=await widget.api.mutate('POST','$path/invite/revoke');
+      if(mounted){setState(()=>code='${r['joinCode']}');}});
+  }
+  Future<void> remove(Map<String,dynamic> member) async {
+    if(!await onlineConfirm(context,'Remove this member’s access?')){return;}
+    await run(() async {await widget.api.mutate('POST','$path/revoke/${Uri.encodeComponent('${member['accountId']}')}');await load();});
+  }
+  Future<void> leave() async {
+    if(!await onlineConfirm(context,'Leave this group?')){return;}
+    await run(() async {await widget.api.mutate('POST','$path/leave');if(mounted){Navigator.pop(context);}});
+  }
+}

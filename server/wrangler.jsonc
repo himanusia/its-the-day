@@ -1,0 +1,7 @@
+{
+  "name": "its-the-day-groups",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-30",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [{"binding":"DB","database_name":"its-the-day-groups","database_id":"SET_UP_D1_DATABASE_ID","migrations_dir":"migrations"}]
+}

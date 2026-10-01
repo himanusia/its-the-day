@@ -2,6 +2,14 @@
 
 An Android-first countdown app for events, H-7/H-3/H-1/H-0 reminders, a home-screen widget, and calendar import.
 
+## Current checkpoint boundaries
+
+Quantity/checklist goals, Android widget goal focus, original Android/iOS/macOS/web icons, and the account client are implemented. Better Auth email/password is locally tested; Google account login integration is setup-gated and not live-verified. The group client remains explicitly unavailable, and signing in does not synchronize local goals. No production deployment, iOS widget, offline reconciliation, or realtime delivery is claimed.
+
+See `server/README.md` for local migrations/auth/provider setup. For local account testing, build Android with `--dart-define=GROUPS_API_URL=http://10.0.2.2:8787` or iOS simulator with `--dart-define=GROUPS_API_URL=http://127.0.0.1:8787`. Web auth requires same-origin cookies. Account login does not request Calendar scopes.
+
+Regenerate launcher assets with `uv run --with Pillow==12.3.0 python tool/generate_icons.py`.
+
 ## Current scope
 
 - Manual countdowns with local persistence.
@@ -58,14 +66,22 @@ The normal gate order is:
 
 The display name and current package/repository slug are **It's the Day!**.
 
-## Persistence status
+## Persistence and goals status
 
 ### Implemented now
 
-- Android events are stored locally as JSON through `SharedPreferencesEventRepository`.
-- Widget state is stored in Android `SharedPreferences`.
-- `MemoryEventRepository` exists only for deterministic tests/previews.
-- There is currently **no server database, account system, realtime sync, group membership, or cross-device state**.
+- Android events and goals are stored locally as versioned JSON through `SharedPreferencesEventRepository`; legacy event stores migrate without dropping events.
+- Quantity goals support positive targets, explicit units, end-of-local-day deadlines, pace guidance, cumulative entries, notes/URLs, soft deletion, quick +1, and duplicate-entry protection.
+- Checklist goals support named items, optional explanations, exactly-once checking, and reversible unchecking.
+- Widget state is stored in Android `SharedPreferences`; a selected countdown remains the primary widget card and the first goal is used when no countdown exists.
+- `MemoryEventRepository` exists for deterministic tests/previews. Web uses the local repository path and explicitly omits native widgets/calendar/reminder integrations without crashing.
+- A local-testable Hono/D1-shaped groups API lives under `server/`; it covers private/shared goals, membership authorization, actor attribution, and idempotency. Its test verifier and SQLite adapter are not production auth.
+- The UI includes setup-needed/offline/permission-denied states for groups and stores mobile session tokens only behind secure storage. Better Auth/provider/deployment setup remains explicit and unconfigured.
+
+### Still required before online release
+
+- Configure and independently verify Better Auth, its D1 adapter/schema, Google identity provider, bearer sessions, origins, rate limits, observability, migrations, and deployment bindings out of band.
+- Add production notification/realtime/offline queue operations and complete emulator/physical-device/release QA. The web app provides in-app cards and local reload persistence; it does not claim native home-screen widgets.
 
 ### Target backend
 
@@ -96,14 +112,14 @@ The Better Auth bearer plugin is the intended mobile transport. Browser cookies 
 
 ### Cloudflare backend and identity
 
-- [ ] Create a separate `server/` Cloudflare Worker using Hono and Wrangler.
-- [ ] Add Better Auth to the Hono Worker and mount `/api/auth/*`.
+- [x] Create a separate `server/` Cloudflare Worker using Hono and Wrangler.
+- [x] Add Better Auth to the Hono Worker and mount `/api/auth/*`; local email/password sessions are tested. Production/provider setup remains unconfigured.
 - [ ] Validate a D1-compatible Better Auth adapter (including schema generation/migrations) against local and deployed Workers before production use.
 - [ ] Add Google account authentication/token verification for Flutter without storing the Google client secret in the mobile app.
-- [ ] Add the Better Auth bearer plugin and a Flutter `AuthApiClient` using HTTPS plus platform secure storage; do not store auth tokens in `SharedPreferences`.
-- [ ] Add D1 migrations for users, groups, memberships, private/shared alarms, per-member responses, device tokens, and append-only audit events.
-- [ ] Add server-side authorization: private alarms are owner-only; shared alarms require active group membership and role checks.
-- [ ] Add idempotency keys and an outbox/retry path for notification and response events.
+- [x] Add a secure Flutter session-token client boundary; web cookie transport and Better Auth sign-in remain setup-needed.
+- [x] Add D1 migrations for accounts, groups, memberships, private/shared goals, progress, checklist state, and idempotency records.
+- [x] Add server-side authorization: private goals are owner-only; shared goals require active group membership and role checks.
+- [x] Add idempotency keys on group creation, goal creation, and progress mutations plus retry tests; durable outbox/retry delivery remains pending.
 - [ ] Add Durable Object coordination per shared alarm/group for realtime state fan-out and conflict-safe updates.
 - [ ] Add offline mobile queue and reconciliation against the server authority.
 

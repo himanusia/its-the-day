@@ -9,6 +9,13 @@
     android:orientation="vertical"
     android:padding="16dp">
 
+    <ImageView
+        android:layout_width="28dp"
+        android:layout_height="28dp"
+        android:layout_marginBottom="6dp"
+        android:contentDescription="It's the Day!"
+        android:src="@drawable/itstheday_splash_mark" />
+
     <TextView
         android:id="@+id/widget_status"
         android:layout_width="match_parent"

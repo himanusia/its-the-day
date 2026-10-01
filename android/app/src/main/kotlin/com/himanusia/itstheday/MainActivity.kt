@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.appwidget.AppWidgetManager
 import android.content.ComponentName
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.provider.CalendarContract
@@ -26,6 +27,20 @@ class MainActivity : FlutterActivity() {
         private const val KEY_EVENT_ID = "eventId"
     }
 
+    private var widgetChannel: MethodChannel? = null
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        widgetChannel?.invokeMethod("openWidgetFocus", launchFocus())
+    }
+
+    private fun launchFocus(): Map<String, String>? {
+        val id = intent?.getStringExtra("focusId") ?: return null
+        val kind = intent?.getStringExtra("focusKind") ?: return null
+        return mapOf("id" to id, "kind" to kind)
+    }
+
     private var pendingCalendarPermission: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -42,11 +57,13 @@ class MainActivity : FlutterActivity() {
             }
         }
 
-        MethodChannel(
+        widgetChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             WIDGET_CHANNEL,
-        ).setMethodCallHandler { call, result ->
+        )
+        widgetChannel!!.setMethodCallHandler { call, result ->
             when (call.method) {
+                "getLaunchFocus" -> result.success(launchFocus())
                 "updateWidget" -> updateWidget(call, result)
                 "clearWidget" -> clearWidget(result)
                 else -> result.notImplemented()
@@ -168,6 +185,11 @@ class MainActivity : FlutterActivity() {
             .putString(KEY_COUNTDOWN, arguments?.get("countdown")?.toString().orEmpty())
             .putString(KEY_STATUS, arguments?.get("status")?.toString().orEmpty())
             .putString(KEY_EVENT_ID, arguments?.get("eventId")?.toString().orEmpty())
+            .putString("focusKind", arguments?.get("focusKind")?.toString().orEmpty())
+            .putString("goalDeadline", arguments?.get("goalDeadline")?.toString().orEmpty())
+            .putString("progress", arguments?.get("progress")?.toString().orEmpty())
+            .putLong("eventTime", (arguments?.get("eventTime") as? Number)?.toLong() ?: 0L)
+            .putBoolean("allDay", arguments?.get("allDay") as? Boolean ?: false)
             .apply()
         updateAllWidgets()
         result.success(null)
