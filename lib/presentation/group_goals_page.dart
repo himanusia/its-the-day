@@ -47,6 +47,7 @@ class _GroupGoalsPageState extends State<GroupGoalsPage> {
     setState(() {
       _busy = true;
       _state = _GroupGoalsState.loading;
+      _items = const [];
       _error = null;
     });
     try {
@@ -68,10 +69,17 @@ class _GroupGoalsPageState extends State<GroupGoalsPage> {
         });
       }
     } on GroupsPermissionDenied {
-      if (mounted) setState(() => _state = _GroupGoalsState.revoked);
+      if (mounted) {
+        setState(() {
+          _items = const [];
+          _state = _GroupGoalsState.revoked;
+          _error = null;
+        });
+      }
     } on GroupsRequestError catch (error) {
       if (mounted) {
         setState(() {
+          _items = const [];
           _state = error.message == 'not_found'
               ? _GroupGoalsState.revoked
               : _GroupGoalsState.error;
@@ -172,6 +180,24 @@ class _GroupGoalsPageState extends State<GroupGoalsPage> {
     if (mounted) await _load();
   }
 
+  void _clearLoadedGoals() {
+    if (!mounted) return;
+    setState(() {
+      _items = const [];
+      _state = _GroupGoalsState.loading;
+      _error = null;
+    });
+  }
+
+  void _markRevoked() {
+    if (!mounted) return;
+    setState(() {
+      _items = const [];
+      _state = _GroupGoalsState.revoked;
+      _error = null;
+    });
+  }
+
   Future<void> _openGoal(OnlineQuantityGoal goal) async {
     if (_busy) return;
     await Navigator.push(
@@ -189,8 +215,13 @@ class _GroupGoalsPageState extends State<GroupGoalsPage> {
     final created = await showDialog<OnlineQuantityGoal>(
       context: context,
       barrierDismissible: false,
-      builder: (_) =>
-          _SharedQuantityGoalDialog(api: _goals, group: widget.group),
+      builder: (_) => _SharedQuantityGoalDialog(
+        api: _goals,
+        group: widget.group,
+        onAccountRecoveryStart: _clearLoadedGoals,
+        onAccountRecoveryComplete: _load,
+        onAccessRevoked: _markRevoked,
+      ),
     );
     if (!mounted || created == null) return;
     await _load();
@@ -353,10 +384,19 @@ class _GroupGoalsStateCard extends StatelessWidget {
 }
 
 class _SharedQuantityGoalDialog extends StatefulWidget {
-  const _SharedQuantityGoalDialog({required this.api, required this.group});
+  const _SharedQuantityGoalDialog({
+    required this.api,
+    required this.group,
+    this.onAccountRecoveryStart,
+    this.onAccountRecoveryComplete,
+    this.onAccessRevoked,
+  });
 
   final OnlineQuantityGoalsApi api;
   final GroupSummary group;
+  final VoidCallback? onAccountRecoveryStart;
+  final Future<void> Function()? onAccountRecoveryComplete;
+  final VoidCallback? onAccessRevoked;
 
   @override
   State<_SharedQuantityGoalDialog> createState() =>
@@ -483,10 +523,14 @@ class _SharedQuantityGoalDialogState extends State<_SharedQuantityGoalDialog> {
   }
 
   Future<void> _openAccount() async {
+    widget.onAccountRecoveryStart?.call();
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => AccountPage(api: widget.api.api)),
     );
+    if (!mounted) return;
+    final onComplete = widget.onAccountRecoveryComplete;
+    if (onComplete != null) await onComplete();
   }
 
   Future<void> _submit() async {
@@ -518,6 +562,7 @@ class _SharedQuantityGoalDialogState extends State<_SharedQuantityGoalDialog> {
       );
       if (mounted) Navigator.pop(context, goal);
     } on Object catch (error) {
+      if (_isRevokedGoalMutationError(error)) widget.onAccessRevoked?.call();
       if (mounted) {
         setState(() {
           _error = _safeCreateError(error);
@@ -537,6 +582,10 @@ String _calendarDate(DateTime value) =>
     '${value.year.toString().padLeft(4, '0')}-'
     '${value.month.toString().padLeft(2, '0')}-'
     '${value.day.toString().padLeft(2, '0')}';
+
+bool _isRevokedGoalMutationError(Object error) =>
+    error is GroupsPermissionDenied ||
+    (error is GroupsRequestError && error.message == 'not_found');
 
 String _safeGoalListError(Object error) {
   if (error is GroupsSignedOut) return 'Your session has ended. Sign in again.';
@@ -558,6 +607,8 @@ String _safeCreateError(Object error) {
   if (error is GroupsPermissionDenied) {
     return 'This account can no longer change this group.';
   }
-  if (error is GroupsRequestError) return error.message;
+  if (error is GroupsRequestError && error.message == 'not_found') {
+    return 'This account can no longer change this group.';
+  }
   return 'Could not create the shared goal. Try again.';
 }

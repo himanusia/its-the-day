@@ -37,6 +37,8 @@ class _OnlineQuantityGoalPageState extends State<OnlineQuantityGoalPage> {
   OnlineQuantityGoalDetail? _detail;
   String? _error;
   bool _busy = false;
+  bool _reloadedAfterAccountRecovery = false;
+  bool _revokedDuringResult = false;
 
   @override
   void initState() {
@@ -50,6 +52,7 @@ class _OnlineQuantityGoalPageState extends State<OnlineQuantityGoalPage> {
     setState(() {
       _busy = true;
       _state = _OnlineGoalState.loading;
+      _detail = null;
       _error = null;
     });
     try {
@@ -71,10 +74,17 @@ class _OnlineQuantityGoalPageState extends State<OnlineQuantityGoalPage> {
         });
       }
     } on GroupsPermissionDenied {
-      if (mounted) setState(() => _state = _OnlineGoalState.revoked);
+      if (mounted) {
+        setState(() {
+          _detail = null;
+          _state = _OnlineGoalState.revoked;
+          _error = null;
+        });
+      }
     } on GroupsRequestError catch (error) {
       if (mounted) {
         setState(() {
+          _detail = null;
           _state = error.message == 'not_found'
               ? _OnlineGoalState.revoked
               : _OnlineGoalState.error;
@@ -175,17 +185,55 @@ class _OnlineQuantityGoalPageState extends State<OnlineQuantityGoalPage> {
     if (mounted) await _load();
   }
 
+  void _markRevoked() {
+    _revokedDuringResult = true;
+    if (!mounted) return;
+    setState(() {
+      _detail = null;
+      _state = _OnlineGoalState.revoked;
+      _error = null;
+    });
+  }
+
+  void _clearLoadedDetail() {
+    _reloadedAfterAccountRecovery = false;
+    if (!mounted) return;
+    setState(() {
+      _detail = null;
+      _state = _OnlineGoalState.loading;
+      _error = null;
+    });
+  }
+
+  Future<void> _reloadAfterAccountRecovery() async {
+    await _load();
+    if (mounted) _reloadedAfterAccountRecovery = true;
+  }
+
   Future<void> _addResult() async {
     if (_busy) return;
+    _reloadedAfterAccountRecovery = false;
+    _revokedDuringResult = false;
     final result = await showDialog<OnlineQuantityResult>(
       context: context,
       barrierDismissible: false,
-      builder: (_) =>
-          _AddQuantityResultDialog(api: _goals, goalId: widget.goalId),
+      builder: (_) => _AddQuantityResultDialog(
+        api: _goals,
+        goalId: widget.goalId,
+        onAccountRecoveryStart: _clearLoadedDetail,
+        onAccountRecoveryComplete: _reloadAfterAccountRecovery,
+        onAccessRevoked: _markRevoked,
+      ),
     );
-    if (!mounted || result == null) return;
-    // The mutation response is not used as optimistic local state. Fetch the
-    // authoritative aggregate and result list again.
+    if (!mounted) return;
+    final reloadedAfterAccountRecovery = _reloadedAfterAccountRecovery;
+    final revokedDuringResult = _revokedDuringResult;
+    _reloadedAfterAccountRecovery = false;
+    _revokedDuringResult = false;
+    if (result == null &&
+        (reloadedAfterAccountRecovery || revokedDuringResult)) {
+      return;
+    }
     await _load();
   }
 }
@@ -401,10 +449,19 @@ class _OnlineGoalStateCard extends StatelessWidget {
 }
 
 class _AddQuantityResultDialog extends StatefulWidget {
-  const _AddQuantityResultDialog({required this.api, required this.goalId});
+  const _AddQuantityResultDialog({
+    required this.api,
+    required this.goalId,
+    this.onAccountRecoveryStart,
+    this.onAccountRecoveryComplete,
+    this.onAccessRevoked,
+  });
 
   final OnlineQuantityGoalsApi api;
   final String goalId;
+  final VoidCallback? onAccountRecoveryStart;
+  final Future<void> Function()? onAccountRecoveryComplete;
+  final VoidCallback? onAccessRevoked;
 
   @override
   State<_AddQuantityResultDialog> createState() =>
@@ -429,7 +486,6 @@ class _AddQuantityResultDialogState extends State<_AddQuantityResultDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final today = DateFormat.yMMMd().format(DateTime.now());
     return AlertDialog(
       title: const Text('Add result'),
       content: Form(
@@ -471,7 +527,7 @@ class _AddQuantityResultDialogState extends State<_AddQuantityResultDialog> {
                   labelText: 'Date',
                   helperText: 'Recorded by the server when you submit.',
                 ),
-                child: Text(today),
+                child: const Text('Assigned by server on submit'),
               ),
               if (_error != null) ...[
                 const SizedBox(height: 12),
@@ -505,10 +561,14 @@ class _AddQuantityResultDialogState extends State<_AddQuantityResultDialog> {
   }
 
   Future<void> _openAccount() async {
+    widget.onAccountRecoveryStart?.call();
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => AccountPage(api: widget.api.api)),
     );
+    if (!mounted) return;
+    final onComplete = widget.onAccountRecoveryComplete;
+    if (onComplete != null) await onComplete();
   }
 
   Future<void> _submit() async {
@@ -530,6 +590,7 @@ class _AddQuantityResultDialogState extends State<_AddQuantityResultDialog> {
       );
       if (mounted) Navigator.pop(context, result);
     } on Object catch (error) {
+      if (_isRevokedResultError(error)) widget.onAccessRevoked?.call();
       if (mounted) {
         setState(() {
           _error = _safeResultError(error);
@@ -541,6 +602,10 @@ class _AddQuantityResultDialogState extends State<_AddQuantityResultDialog> {
     }
   }
 }
+
+bool _isRevokedResultError(Object error) =>
+    error is GroupsPermissionDenied ||
+    (error is GroupsRequestError && error.message == 'not_found');
 
 String _safeOnlineGoalError(Object error) {
   if (error is GroupsOffline) return error.message;
@@ -561,6 +626,8 @@ String _safeResultError(Object error) {
   if (error is GroupsPermissionDenied) {
     return 'This shared goal is no longer available to this account.';
   }
-  if (error is GroupsRequestError) return error.message;
+  if (error is GroupsRequestError && error.message == 'not_found') {
+    return 'This shared goal is no longer available to this account.';
+  }
   return 'Could not add the result. Try again.';
 }

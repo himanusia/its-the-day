@@ -244,6 +244,57 @@ void main() {
   );
 
   testWidgets(
+    'account recovery from create refreshes the parent even when the dialog is canceled',
+    (tester) async {
+      final client = _QueueClient([
+        (_) => _json({
+          'goals': [_goal(title: 'Old account goal')],
+          'state': 'online',
+        }, 200),
+        (_) => _json({'error': 'unauthorized'}, 401),
+        (_) => _json({'auth': 'better_auth', 'google': 'setup_needed'}, 200),
+        (_) => _json({'state': 'online', 'email': 'new@example.test'}, 200),
+        (_) => _json({
+          'goals': [_goal(title: 'New account goal')],
+          'state': 'online',
+        }, 200),
+      ]);
+
+      await tester.pumpWidget(_groupGoalsPage(_api(client)));
+      await tester.pumpAndSettle();
+      expect(find.text('Old account goal'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('create-shared-goal-action')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('shared-goal-title-field')),
+        'Draft goal',
+      );
+      await tester.tap(find.byKey(const ValueKey('shared-goal-submit')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('shared-goal-reauth')), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('shared-goal-reauth')));
+      await tester.pumpAndSettle();
+      expect(find.text('Signed in'), findsOneWidget);
+      await tester.tap(find.byTooltip('Back'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(find.text('New account goal'), findsOneWidget);
+      expect(find.text('Old account goal'), findsNothing);
+      expect(
+        client.requests.where(
+          (request) =>
+              request.method == 'GET' && request.url.path == '/api/goals',
+        ),
+        hasLength(2),
+      );
+    },
+  );
+
+  testWidgets(
     'renders setup and offline states instead of local or fake goals',
     (tester) async {
       await tester.pumpWidget(
