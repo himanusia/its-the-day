@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/group_membership.dart';
 import '../data/groups_api.dart';
 import 'account_page.dart';
+import 'group_goals_page.dart';
 import 'playful_widgets.dart';
 
 class GroupMembersPage extends StatefulWidget {
@@ -138,6 +139,7 @@ class _GroupMembersPageState extends State<GroupMembersPage> {
                   _MembersState.online => _OnlineMembers(
                     group: widget.group,
                     members: _members,
+                    onOpenGoals: _openGoals,
                   ),
                 },
               ],
@@ -156,13 +158,28 @@ class _GroupMembersPageState extends State<GroupMembersPage> {
     );
     if (mounted) await _load();
   }
+
+  Future<void> _openGoals() async {
+    if (_busy) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => GroupGoalsPage(api: widget.api, group: widget.group),
+      ),
+    );
+  }
 }
 
 class _OnlineMembers extends StatelessWidget {
-  const _OnlineMembers({required this.group, required this.members});
+  const _OnlineMembers({
+    required this.group,
+    required this.members,
+    required this.onOpenGoals,
+  });
 
   final GroupSummary group;
   final List<GroupMember> members;
+  final VoidCallback onOpenGoals;
 
   @override
   Widget build(BuildContext context) {
@@ -170,6 +187,14 @@ class _OnlineMembers extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        PlayfulButton.icon(
+          key: const ValueKey('group-goals-action'),
+          icon: Icons.flag_outlined,
+          semanticLabel: 'Open shared goals',
+          onPressed: onOpenGoals,
+          label: const Text('Shared goals'),
+        ),
+        const SizedBox(height: 20),
         if (group.role == GroupRole.owner && group.joinCode != null) ...[
           PlayfulPanel(
             padding: const EdgeInsets.all(18),
