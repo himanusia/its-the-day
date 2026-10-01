@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 
 import '../data/event_repository.dart';
+import '../data/groups_api.dart';
 import '../platform/google_calendar_gateway.dart';
 import '../platform/platform_interfaces.dart';
 import 'itstheday_controller.dart';
 import 'itstheday_theme.dart';
 import 'home_page.dart';
+import 'brand_mark.dart';
 
 class ItsTheDayApp extends StatelessWidget {
   const ItsTheDayApp({
@@ -15,6 +17,7 @@ class ItsTheDayApp extends StatelessWidget {
     required this.widget,
     required this.reminders,
     this.googleCalendar = const UnsupportedGoogleCalendarGateway(),
+    this.accountApi,
     this.clock,
   });
 
@@ -23,10 +26,17 @@ class ItsTheDayApp extends StatelessWidget {
   final WidgetGateway widget;
   final ReminderGateway reminders;
   final GoogleCalendarGateway googleCalendar;
+  final GroupsApi? accountApi;
   final DateTime Function()? clock;
 
   @override
   Widget build(BuildContext context) {
+    final onlineApi =
+        accountApi ??
+        GroupsApi(
+          baseUrl: const String.fromEnvironment('GROUPS_API_URL'),
+          tokens: const NativeSessionTokenStore(),
+        );
     final controller = ItsTheDayController(
       repository: repository,
       calendar: calendar,
@@ -41,15 +51,19 @@ class ItsTheDayApp extends StatelessWidget {
       theme: itsthedayLightTheme(),
       darkTheme: itsthedayDarkTheme(),
       themeMode: ThemeMode.system,
-      home: _ItsTheDayBootstrap(controller: controller),
+      home: _ItsTheDayBootstrap(controller: controller, accountApi: onlineApi),
     );
   }
 }
 
 class _ItsTheDayBootstrap extends StatefulWidget {
-  const _ItsTheDayBootstrap({required this.controller});
+  const _ItsTheDayBootstrap({
+    required this.controller,
+    required this.accountApi,
+  });
 
   final ItsTheDayController controller;
+  final GroupsApi accountApi;
 
   @override
   State<_ItsTheDayBootstrap> createState() => _ItsTheDayBootstrapState();
@@ -75,7 +89,10 @@ class _ItsTheDayBootstrapState extends State<_ItsTheDayBootstrap> {
         if (snapshot.hasError) {
           return _ItsTheDayLoadError(onRetry: _retry);
         }
-        return HomePage(controller: widget.controller);
+        return HomePage(
+          controller: widget.controller,
+          accountApi: widget.accountApi,
+        );
       },
     );
   }
@@ -97,6 +114,8 @@ class _ItsTheDayLoading extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            const ItsTheDayMark(size: 64),
+            const SizedBox(height: 18),
             Text(
               "IT'S THE DAY!",
               style: Theme.of(context).textTheme.labelMedium?.copyWith(
@@ -104,7 +123,6 @@ class _ItsTheDayLoading extends StatelessWidget {
                 letterSpacing: 2.4,
               ),
             ),
-            const SizedBox(height: 18),
             SizedBox(
               width: 34,
               height: 34,
