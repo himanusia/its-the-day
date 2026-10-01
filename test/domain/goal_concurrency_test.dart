@@ -33,8 +33,9 @@ class _DelayedRepository extends MemoryEventRepository {
     String? selectedGoalId,
   }) async {
     activeWrites++;
-    if (activeWrites > maximumConcurrentWrites)
+    if (activeWrites > maximumConcurrentWrites) {
       maximumConcurrentWrites = activeWrites;
+    }
     try {
       await Future<void>.delayed(const Duration(milliseconds: 15));
       await super.write(
