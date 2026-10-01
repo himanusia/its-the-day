@@ -1,0 +1,93 @@
+import 'package:flutter/material.dart';
+import '../data/groups_api.dart';
+import 'playful_widgets.dart';
+
+typedef OnlineSubmit = Future<Map<String,dynamic>> Function(Map<String,dynamic> values,String operationId);
+class OnlineField {
+  const OnlineField(this.key,this.label,{this.initial='',this.required=true,this.number=false,
+    this.url=false,this.multiline=false,this.date=false,this.options});
+  final String key,label,initial;
+  final bool required,number,url,multiline,date;
+  final Map<String,String>? options;
+}
+Future<Map<String,dynamic>?> onlineForm(BuildContext context,{required String title,
+  required List<OnlineField> fields,required OnlineSubmit submit}) => showDialog<Map<String,dynamic>>(
+    context:context,barrierDismissible:false,
+    builder:(_)=>_OnlineForm(title:title,fields:fields,submit:submit));
+class _OnlineForm extends StatefulWidget {
+  const _OnlineForm({required this.title,required this.fields,required this.submit});
+  final String title;
+  final List<OnlineField> fields;
+  final OnlineSubmit submit;
+  @override State<_OnlineForm> createState()=>_OnlineFormState();
+}
+class _OnlineFormState extends State<_OnlineForm> {
+  final form=GlobalKey<FormState>();
+  late final controllers={for(final f in widget.fields) f.key:TextEditingController(text:f.initial)};
+  bool busy=false;
+  String? error;
+  String key=GroupsApi.operationKey();
+  String? lastPayload;
+  @override void dispose(){ for(final c in controllers.values){c.dispose();} super.dispose(); }
+  @override Widget build(BuildContext context)=>AlertDialog(
+    title:Text(widget.title),content:Form(key:form,child:SingleChildScrollView(child:Column(
+      mainAxisSize:MainAxisSize.min,children:[
+        for(final f in widget.fields) Padding(padding:const EdgeInsets.only(bottom:14),child:
+          f.options!=null ? DropdownButtonFormField<String>(
+            initialValue:controllers[f.key]!.text.isEmpty ? f.options!.keys.first : controllers[f.key]!.text,
+            isExpanded:true,decoration:InputDecoration(labelText:f.label),
+            items:f.options!.entries.map((e)=>DropdownMenuItem(value:e.key,child:Text(e.value))).toList(),
+            onChanged:busy ? null : (v)=>controllers[f.key]!.text=v ?? '',
+          ) : TextFormField(controller:controllers[f.key],enabled:!busy,
+            maxLines:f.multiline ? 3 : 1,keyboardType:f.number ? TextInputType.number :
+              f.url ? TextInputType.url : TextInputType.text,
+            decoration:InputDecoration(labelText:f.label),
+            validator:(v){
+              final value=(v ?? '').trim();
+              if(f.required && value.isEmpty){return 'Required';}
+              if(f.number && (int.tryParse(value) ?? 0)<1){return 'Use a positive whole number';}
+              if(f.date){
+                final d=DateTime.tryParse(value);
+                if(d==null || !RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(value) ||
+                  '${d.year.toString().padLeft(4,'0')}-${d.month.toString().padLeft(2,'0')}-${d.day.toString().padLeft(2,'0')}'!=value){return 'Use a valid YYYY-MM-DD date';}
+              }
+              if(f.url && value.isNotEmpty){
+                final u=Uri.tryParse(value);
+                if(u==null || !['http','https'].contains(u.scheme) || u.host.isEmpty ||
+                  u.userInfo.isNotEmpty || value.contains(RegExp(r'\s'))){return 'Use a valid http(s) URL';}
+              }
+              return null;
+            })),
+        if(error!=null) Text(error!,style:TextStyle(color:Theme.of(context).colorScheme.error)),
+      ]))),actions:[
+        TextButton(onPressed:busy ? null : ()=>Navigator.pop(context),child:const Text('Cancel')),
+        PlayfulButton(onPressed:busy ? null : save,child:Text(busy ? 'Saving…' : 'Save')),
+      ]);
+  Future<void> save() async {
+    if(busy || !form.currentState!.validate()){return;}
+    final values=<String,dynamic>{for(final f in widget.fields) f.key:
+      f.number ? int.parse(controllers[f.key]!.text.trim()) :
+      f.options!=null && controllers[f.key]!.text.isEmpty ? f.options!.keys.first : controllers[f.key]!.text.trim()};
+    final payload=values.toString();
+    if(lastPayload!=null && lastPayload!=payload){key=GroupsApi.operationKey();}
+    lastPayload=payload;
+    setState((){busy=true;error=null;});
+    try {
+      final result=await widget.submit(values,key);
+      if(mounted){Navigator.pop(context,result);}
+    } catch(e){if(mounted){setState(()=>error=onlineError(e));}}
+    finally {if(mounted){setState(()=>busy=false);}}
+  }
+}
+String onlineError(Object e){
+  if(e is GroupsSetupNeeded){return 'Server needs setup. Local goals are still available.';}
+  if(e is GroupsSignedOut){return 'Sign in again to continue.';}
+  return e.toString();
+}
+Future<bool> onlineConfirm(BuildContext context,String title)=>showDialog<bool>(context:context,
+  builder:(_)=>AlertDialog(title:Text(title),actions:[
+    TextButton(onPressed:()=>Navigator.pop(context,false),child:const Text('Cancel')),
+    FilledButton(onPressed:()=>Navigator.pop(context,true),child:const Text('Confirm')),
+  ])).then((v)=>v ?? false);
+List<Map<String,dynamic>> onlineRows(dynamic value)=>value is List ? value
+  .whereType<Map>().map((e)=>Map<String,dynamic>.from(e)).toList() : [];

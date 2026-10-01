@@ -1,0 +1,127 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:http/http.dart' as http;
+
+abstract interface class SessionTokenStore {
+  Future<String?> read();
+  Future<void> write(String token);
+  Future<void> clear();
+}
+class NativeSessionTokenStore implements SessionTokenStore {
+  const NativeSessionTokenStore();
+  static const _store = FlutterSecureStorage();
+  static const _key = 'itstheday.session';
+  @override Future<String?> read() => _store.read(key: _key);
+  @override Future<void> write(String token) => _store.write(key: _key, value: token);
+  @override Future<void> clear() => _store.delete(key: _key);
+}
+
+/// Same-origin browsers use HttpOnly cookies; native clients use secure storage.
+class GroupsApi {
+  GroupsApi({required this.baseUrl, required this.tokens, http.Client? client,
+    bool? browser, Uri? pageOrigin}) : _client = client ?? http.Client(),
+    _browser = browser ?? kIsWeb, _pageOrigin = pageOrigin ?? Uri.base;
+  final String baseUrl;
+  final SessionTokenStore tokens;
+  final http.Client _client;
+  final bool _browser;
+  final Uri _pageOrigin;
+  Uri? get _base {
+    final value = baseUrl.isEmpty && _browser ? _pageOrigin.origin : baseUrl;
+    final uri = Uri.tryParse(value);
+    if (uri == null || uri.host.isEmpty || uri.userInfo.isNotEmpty || uri.hasQuery ||
+      uri.hasFragment || (uri.path.isNotEmpty && uri.path != '/')) { return null; }
+    final loopback = ['localhost','127.0.0.1','::1'].contains(uri.host) ||
+      (kDebugMode && uri.host == '10.0.2.2');
+    if (uri.scheme != 'https' && !(uri.scheme == 'http' && loopback)) { return null; }
+    if (_browser && uri.origin != _pageOrigin.origin) { return null; }
+    return uri;
+  }
+  bool get configured => _base != null;
+  static String operationKey() {
+    final random=Random.secure();
+    return List.generate(16, (_) => random.nextInt(256).toRadixString(16).padLeft(2,'0')).join();
+  }
+  void close() => _client.close();
+  Future<Map<String,dynamic>> signIn(String email,String password) =>
+    _authenticate('/api/auth/sign-in/email',{'email':email,'password':password});
+  Future<Map<String,dynamic>> signUp(String name,String email,String password) =>
+    _authenticate('/api/auth/sign-up/email',{'name':name,'email':email,'password':password});
+  Future<Map<String,dynamic>> _authenticate(String path,Map<String,dynamic> body) async {
+    final response=await _send('POST',path,body:body,authenticated:false);
+    if (!_browser) {
+      final token=response.headers['set-auth-token'];
+      if (token==null || token.isEmpty) {
+        throw const GroupsRequestError('Sign-in did not return a native session.');
+      }
+      await tokens.write(token);
+    }
+    return _decode(response);
+  }
+  Future<void> signOut() async {
+    await request('POST','/api/auth/sign-out',body:{});
+    if (!_browser) { await tokens.clear(); }
+  }
+  Future<Map<String,dynamic>> request(String method,String path,{
+    Map<String,dynamic>? body,String? idempotencyKey}) async =>
+      _decode(await _send(method,path,body:body,idempotencyKey:idempotencyKey));
+  Future<Map<String,dynamic>> mutate(String method,String path,{
+    Map<String,dynamic> body=const {},String? operationId}) =>
+      request(method,path,body:body,idempotencyKey:operationId ?? operationKey());
+  Future<http.Response> _send(String method,String path,{
+    Map<String,dynamic>? body,String? idempotencyKey,bool authenticated=true}) async {
+    final base=_base;
+    if (base==null) { throw const GroupsSetupNeeded(); }
+    if (!path.startsWith('/api/') || path.startsWith('//')) { throw ArgumentError('Invalid API path'); }
+    final headers=<String,String>{'Content-Type':'application/json'};
+    if (authenticated && !_browser) {
+      final token=await tokens.read();
+      if (token==null || token.isEmpty) { throw const GroupsSignedOut(); }
+      headers['Authorization']='Bearer $token';
+    }
+    if (idempotencyKey!=null) { headers['Idempotency-Key']=idempotencyKey; }
+    try {
+      final request=http.Request(method,base.resolve(path))..headers.addAll(headers)
+        ..body=body==null ? '' : jsonEncode(body);
+      final response=await (() async => http.Response.fromStream(await _client.send(request)))()
+        .timeout(const Duration(seconds:20));
+      _decode(response);
+      return response;
+    } on TimeoutException {
+      throw const GroupsOffline('Request timed out. Your draft is unchanged.');
+    } on http.ClientException {
+      throw const GroupsOffline('Could not reach the server. Try again.');
+    }
+  }
+  Map<String,dynamic> _decode(http.Response response) {
+    Map<String,dynamic> body;
+    try {
+      final decoded=jsonDecode(response.body);
+      if (decoded is! Map<String,dynamic>) { throw const FormatException(); }
+      body=decoded;
+    } on FormatException { throw const GroupsRequestError('Server returned an invalid response.'); }
+    if (response.statusCode==401) { throw const GroupsSignedOut(); }
+    if (body['state']=='setup_needed') { throw const GroupsSetupNeeded(); }
+    if (response.statusCode==403) { throw GroupsPermissionDenied(body['error']?.toString() ?? 'Access denied'); }
+    if (response.statusCode>=400) { throw GroupsRequestError(body['message']?.toString() ??
+      body['error']?.toString() ?? 'Server error'); }
+    return body;
+  }
+}
+class GroupsSetupNeeded implements Exception { const GroupsSetupNeeded(); }
+class GroupsSignedOut implements Exception { const GroupsSignedOut(); }
+class GroupsPermissionDenied implements Exception {
+  const GroupsPermissionDenied(this.message); final String message;
+  @override String toString()=>message;
+}
+class GroupsRequestError implements Exception {
+  const GroupsRequestError(this.message); final String message;
+  @override String toString()=>message;
+}
+class GroupsOffline implements Exception {
+  const GroupsOffline(this.message); final String message;
+  @override String toString()=>message;
+}
