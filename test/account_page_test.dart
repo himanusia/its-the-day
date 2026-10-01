@@ -113,7 +113,7 @@ void main() {
     expect(find.text('account-123'), findsNothing);
     expect(find.textContaining('account-123'), findsNothing);
     expect(
-      find.textContaining('Groups stay unavailable until Iteration 3.'),
+      find.textContaining('Open Groups to create or join a circle.'),
       findsOneWidget,
     );
   });

@@ -127,6 +127,8 @@ test('membership, privacy, revocation and concurrent idempotent progress', async
   ).body;
   assert.equal((await call('bob', 'GET', `/api/goals/${shared.id}`)).status, 404);
   await call('bob', 'POST', '/api/groups/join', { code: group.joinCode }, 'join-bob');
+  assert.equal((await call('alice', 'GET', '/api/groups')).body.groups[0].joinCode, group.joinCode);
+  assert.equal((await call('bob', 'GET', '/api/groups')).body.groups[0].joinCode, null);
   const requests = Array.from({ length: 8 }, () =>
     call('bob', 'POST', `/api/goals/${shared.id}/progress`, { amount: 3 }, 'p'),
   );

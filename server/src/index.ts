@@ -644,7 +644,7 @@ async function goalPayload(
 }
 
 function groupSelect() {
-  return `SELECT g.id,g.name,g.join_code AS joinCode,g.owner_id AS ownerId,
+  return `SELECT g.id,g.name,CASE WHEN m.role='owner' THEN g.join_code ELSE NULL END AS joinCode,g.owner_id AS ownerId,
     g.created_at AS createdAt,m.role,m.joined_at AS joinedAt,
     (SELECT COUNT(*) FROM memberships activeMembers
       WHERE activeMembers.group_id=g.id AND activeMembers.active=1) AS memberCount

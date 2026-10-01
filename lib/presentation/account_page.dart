@@ -412,7 +412,7 @@ class _SignedOutCard extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               const Text(
-                'Your local tracker stays usable without an account. Online groups remain unavailable until Iteration 3.',
+                'Your local tracker stays usable without an account. Sign in to create or join groups.',
               ),
               const SizedBox(height: 20),
               if (signUp) ...[
@@ -528,7 +528,7 @@ class _SignedInCard extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           const Text(
-            'Groups stay unavailable until Iteration 3. Local goals remain on this device.',
+            'Open Groups to create or join a circle. Local goals remain on this device.',
           ),
           const SizedBox(height: 20),
           FilledButton.icon(

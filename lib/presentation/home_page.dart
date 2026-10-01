@@ -19,7 +19,7 @@ import 'goal_pages.dart';
 import 'itstheday_controller.dart';
 import 'itstheday_theme.dart';
 import 'playful_widgets.dart';
-import 'unavailable_groups_page.dart';
+import 'groups_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({
@@ -118,7 +118,8 @@ class _HomePageState extends State<HomePage> {
                               onGroups: () => Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                  builder: (_) => const GroupsUnavailablePage(),
+                                  builder: (_) =>
+                                      GroupsPage(api: widget.accountApi),
                                 ),
                               ),
                             ),
