@@ -106,6 +106,7 @@ class GoalPaceSuggestion {
       GoalPaceState.active when isToday => '$remaining $cleanUnit today',
       GoalPaceState.active when dailyTarget != null =>
         '$dailyTarget $cleanUnit/day',
+      GoalPaceState.active when intervalDays == 1 => '1 $cleanUnit/day',
       GoalPaceState.active => '1 $cleanUnit every $intervalDays days',
     };
   }

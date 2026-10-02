@@ -86,6 +86,17 @@ void main() {
     expect(empty.label('items'), 'no work yet');
   });
 
+  test('a one-day interval is presented as a daily target', () {
+    final pace = GoalPaceSuggestion.forValues(
+      target: 48,
+      completed: 0,
+      deadline: DateTime(2027, 1, 1),
+      now: DateTime(2026, 10, 2),
+    );
+    expect(pace.intervalDays, 1);
+    expect(pace.label('tasks'), '1 tasks/day');
+  });
+
   test('online-style totals use the authoritative completed value', () {
     final pace = GoalPaceSuggestion.forValues(
       target: 10,

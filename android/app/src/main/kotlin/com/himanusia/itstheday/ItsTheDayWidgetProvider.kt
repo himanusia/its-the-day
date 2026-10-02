@@ -230,8 +230,9 @@ class ItsTheDayWidgetProvider : AppWidgetProvider() {
             val rootId = if (compact) R.id.widget_compact_root else R.id.widget_root
             val compactProgress = when {
                 status == "EMPTY" -> "EMPTY"
-                status == "COMPLETED" -> "DONE · $progress"
-                kind == "goal" -> "$status · $progress"
+                kind == "goal" ->
+                    "${preferences.getLong(KEY_GOAL_COMPLETED, 0L).coerceAtLeast(0L)}/" +
+                        "${preferences.getLong(KEY_GOAL_TARGET, 0L).coerceAtLeast(0L)}"
                 else -> status
             }
             if (compact) {
