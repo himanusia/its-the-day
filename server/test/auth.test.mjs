@@ -64,13 +64,18 @@ test('Better Auth email/password bearer session works on a D1-shaped runtime', a
   const env = {
     DB: d1Sqlite(),
     BETTER_AUTH_SECRET: 'local-test-secret-please-change-32-chars',
-    BETTER_AUTH_URL: 'http://local',
+    BETTER_AUTH_URL: 'https://local',
+    AUTH_RATE_LIMITER: { async limit() { return { success: true }; } },
   };
   const signUp = await app.request(
-    'http://local/api/auth/sign-up/email',
+    'https://local/api/auth/sign-up/email',
     {
       method: 'POST',
-      headers: { 'content-type': 'application/json', origin: 'http://local' },
+      headers: {
+        'content-type': 'application/json',
+        origin: 'https://local',
+        'cf-connecting-ip': '198.51.100.20',
+      },
       body: JSON.stringify({
         name: 'Local Tester',
         email: 'auth@example.test',
@@ -82,9 +87,12 @@ test('Better Auth email/password bearer session works on a D1-shaped runtime', a
   assert.equal(signUp.status, 200);
   const signUpToken = signUp.headers.get('set-auth-token');
   assert.ok(signUpToken);
+  const signUpCookie = signUp.headers.get('set-cookie') ?? '';
+  assert.match(signUpCookie, /Secure/i);
+  assert.match(signUpCookie, /SameSite=Lax/i);
 
   const session = await app.request(
-    'http://local/api/session',
+    'https://local/api/session',
     { headers: { authorization: `Bearer ${signUpToken}` } },
     env,
   );
@@ -97,10 +105,14 @@ test('Better Auth email/password bearer session works on a D1-shaped runtime', a
   assert.equal(sessionBody.name, 'Local Tester');
 
   const signIn = await app.request(
-    'http://local/api/auth/sign-in/email',
+    'https://local/api/auth/sign-in/email',
     {
       method: 'POST',
-      headers: { 'content-type': 'application/json', origin: 'http://local' },
+      headers: {
+        'content-type': 'application/json',
+        origin: 'https://local',
+        'cf-connecting-ip': '198.51.100.20',
+      },
       body: JSON.stringify({
         email: 'auth@example.test',
         password: 'local-password-123',
@@ -113,13 +125,13 @@ test('Better Auth email/password bearer session works on a D1-shaped runtime', a
   assert.ok(signInToken);
 
   const signOut = await app.request(
-    'http://local/api/auth/sign-out',
+    'https://local/api/auth/sign-out',
     { method: 'POST', headers: { authorization: `Bearer ${signInToken}` } },
     env,
   );
   assert.equal(signOut.status, 200);
   const afterSignOut = await app.request(
-    'http://local/api/session',
+    'https://local/api/session',
     { headers: { authorization: `Bearer ${signInToken}` } },
     env,
   );
