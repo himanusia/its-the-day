@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../data/groups_api.dart';
 import '../data/group_membership.dart';
 import '../data/online_quantity_goals.dart';
+import '../domain/goal_pace.dart';
 import 'account_page.dart';
 import 'playful_widgets.dart';
 
@@ -254,6 +255,12 @@ class _OnlineGoalContent extends StatelessWidget {
     final goal = detail.goal;
     final colors = Theme.of(context).colorScheme;
     final deadline = DateFormat.yMMMd().format(goal.deadline);
+    final pace = GoalPaceSuggestion.forValues(
+      target: goal.target,
+      completed: goal.completed,
+      deadline: goal.deadline,
+      now: DateTime.now(),
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -298,6 +305,12 @@ class _OnlineGoalContent extends StatelessWidget {
                   ),
                   Text(
                     'Due $deadline',
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      color: colors.onSurface.withValues(alpha: .66),
+                    ),
+                  ),
+                  Text(
+                    'Pace ${pace.label(goal.unit)}',
                     style: Theme.of(context).textTheme.labelLarge?.copyWith(
                       color: colors.onSurface.withValues(alpha: .66),
                     ),
