@@ -1,0 +1,10 @@
+{
+  "name": "its-the-day-chrome-companion",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Bounded MV3 doorway to the hosted It's the Day! web app.",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "package": "python3 scripts/package.py"
+  }
+}

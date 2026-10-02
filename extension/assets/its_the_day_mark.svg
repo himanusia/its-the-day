@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">It's the Day! mark</title>
+  <desc id="desc">A mint clock face with an amber spark on a midnight square.</desc>
+  <rect width="256" height="256" rx="72" fill="#0D1117"/>
+  <circle cx="128" cy="128" r="83" fill="#57D5A0"/>
+  <circle cx="128" cy="128" r="64" fill="#0D1117"/>
+  <path d="M120 71h16v54l37 22-9 15-44-27z" fill="#A9F4D0"/>
+  <circle cx="128" cy="128" r="9" fill="#FFD28A"/>
+  <path d="M190 54l5 12 12 5-12 5-5 12-5-12-12-5 12-5z" fill="#FFD28A"/>
+</svg>
