@@ -12,8 +12,8 @@
     <ImageView
         android:layout_width="28dp"
         android:layout_height="28dp"
-        android:layout_marginBottom="6dp"
-        android:contentDescription="It's the Day!"
+        android:layout_marginBottom="4dp"
+        android:contentDescription="It's the Day! clock and spark"
         android:src="@drawable/itstheday_splash_mark" />
 
     <TextView
@@ -22,6 +22,7 @@
         android:layout_height="wrap_content"
         android:ellipsize="end"
         android:fontFamily="sans"
+        android:includeFontPadding="false"
         android:letterSpacing="0.14"
         android:maxLines="1"
         android:text="FOCUS"
@@ -33,7 +34,7 @@
         android:id="@+id/widget_title"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="7dp"
+        android:layout_marginTop="5dp"
         android:ellipsize="end"
         android:fontFamily="sans"
         android:maxLines="2"
@@ -46,11 +47,38 @@
         android:id="@+id/widget_countdown"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="5dp"
+        android:layout_marginTop="4dp"
         android:fontFamily="sans-serif"
         android:includeFontPadding="false"
         android:text="D-7"
         android:textColor="#A9F4D0"
         android:textSize="31sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/widget_progress"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:ellipsize="end"
+        android:fontFamily="sans"
+        android:includeFontPadding="false"
+        android:maxLines="1"
+        android:text="0/10 pages"
+        android:textColor="#EFF5F0"
+        android:textSize="12sp" />
+
+    <TextView
+        android:id="@+id/widget_pace"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:ellipsize="end"
+        android:fontFamily="sans"
+        android:includeFontPadding="false"
+        android:maxLines="1"
+        android:text="PACE · 2 pages/day"
+        android:textColor="#FFD28A"
+        android:textSize="10sp"
         android:textStyle="bold" />
 </LinearLayout>

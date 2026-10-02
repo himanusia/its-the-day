@@ -47,6 +47,9 @@ class AndroidWidgetGateway implements WidgetGateway {
       'goalDeadline': goal.toJson()['deadline'],
       'progress':
           '${goal.completed}/${goal.goalTarget} ${goal.kind == GoalKind.quantity ? goal.unit : 'items'}',
+      'goalCompleted': goal.completed,
+      'goalTarget': goal.goalTarget,
+      'goalUnit': goal.kind == GoalKind.quantity ? goal.unit : 'items',
     });
   }
 }
