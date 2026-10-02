@@ -9,6 +9,7 @@ Gradle keep consuming the established technical resources.
 """
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 from typing import Iterable
@@ -19,13 +20,17 @@ ROOT = Path(__file__).resolve().parents[1]
 MASTER_VIEWBOX = 256
 RENDER_SIZE = 4096
 BACKGROUND = '#0D1117'
+# Keep the original clock/spark geometry, but place Android legacy pixels in
+# the adaptive icon safe circle as well. Web and Apple rasters keep the master
+# scale; --android-only avoids churning those catalogs during native fixes.
+ANDROID_MARK_SCALE = 0.78
 
 
 def _box(values: Iterable[float], canvas: int) -> tuple[int, ...]:
     return tuple(round(value * canvas / MASTER_VIEWBOX) for value in values)
 
 
-def _render_master() -> Image.Image:
+def _render_master(*, mark_scale: float = 1.0) -> Image.Image:
     """Rasterize the simple SVG master at a fixed supersampled resolution.
 
     The master intentionally uses only rect/circle/path primitives. Keeping the
@@ -33,6 +38,9 @@ def _render_master() -> Image.Image:
     preserving deterministic antialiasing for every platform's PNGs.
     """
     canvas = RENDER_SIZE
+    if not 0 < mark_scale <= 1:
+        raise ValueError(f'mark_scale must be in (0, 1], got {mark_scale}')
+
     image = Image.new('RGBA', (canvas, canvas), BACKGROUND)
     draw = ImageDraw.Draw(image)
 
@@ -42,6 +50,10 @@ def _render_master() -> Image.Image:
         radius=round(72 * canvas / MASTER_VIEWBOX),
         fill=BACKGROUND,
     )
+    # Draw the complete original clock/spark mark on a transparent layer so
+    # Android can scale only the foreground while keeping its full background.
+    mark = Image.new('RGBA', (canvas, canvas), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(mark)
     # <circle cx="128" cy="128" r="83" ... />
     draw.ellipse(_box((45, 45, 211, 211), canvas), fill='#57D5A0')
     # <circle cx="128" cy="128" r="64" ... />
@@ -73,12 +85,24 @@ def _render_master() -> Image.Image:
         )],
         fill='#FFD28A',
     )
+    if mark_scale != 1.0:
+        mark_size = round(canvas * mark_scale)
+        mark = mark.resize((mark_size, mark_size), Image.Resampling.LANCZOS)
+        margin = (canvas - mark_size) // 2
+        image.alpha_composite(mark, (margin, margin))
+    else:
+        image.alpha_composite(mark)
     return image
 
 
-def icon(size: int, *, maskable: bool = False) -> Image.Image:
+def icon(
+    size: int,
+    *,
+    maskable: bool = False,
+    mark_scale: float = 1.0,
+) -> Image.Image:
     """Return an opaque RGB PNG image at the requested pixel size."""
-    image = _render_master()
+    image = _render_master(mark_scale=mark_scale)
     if maskable:
         safe_size = round(RENDER_SIZE * 0.84)
         safe = image.resize((safe_size, safe_size), Image.Resampling.LANCZOS)
@@ -110,16 +134,34 @@ def _catalog_outputs(relative_catalog: str) -> dict[Path, int]:
     return {catalog / name: pixels for name, pixels in outputs.items()}
 
 
-def _write_outputs(outputs: dict[Path, int], *, maskable: set[Path] | None = None) -> None:
+def _write_outputs(
+    outputs: dict[Path, int],
+    *,
+    maskable: set[Path] | None = None,
+    android: set[Path] | None = None,
+) -> None:
     maskable = maskable or set()
+    android = android or set()
     for path, size in outputs.items():
         path.parent.mkdir(parents=True, exist_ok=True)
-        icon(size, maskable=path in maskable).save(path, format='PNG', optimize=False)
+        icon(
+            size,
+            maskable=path in maskable,
+            mark_scale=ANDROID_MARK_SCALE if path in android else 1.0,
+        ).save(path, format='PNG', optimize=False)
         print(f'{path.relative_to(ROOT)}: {size}x{size}')
 
 
-def main() -> None:
-    outputs = {
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        '--android-only',
+        action='store_true',
+        help='regenerate only Android legacy launcher PNGs',
+    )
+    args = parser.parse_args(argv)
+
+    android_outputs = {
         ROOT / f'android/app/src/main/res/mipmap-{density}/ic_launcher.png': size
         for density, size in (
             ('mdpi', 48),
@@ -129,20 +171,22 @@ def main() -> None:
             ('xxxhdpi', 192),
         )
     }
-    outputs.update({
-        ROOT / 'web/favicon.png': 32,
-        ROOT / 'web/icons/Icon-192.png': 192,
-        ROOT / 'web/icons/Icon-512.png': 512,
-        ROOT / 'web/icons/Icon-maskable-192.png': 192,
-        ROOT / 'web/icons/Icon-maskable-512.png': 512,
-    })
-    outputs.update(_catalog_outputs('ios/Runner/Assets.xcassets/AppIcon.appiconset'))
-    outputs.update(_catalog_outputs('macos/Runner/Assets.xcassets/AppIcon.appiconset'))
+    outputs = dict(android_outputs)
+    if not args.android_only:
+        outputs.update({
+            ROOT / 'web/favicon.png': 32,
+            ROOT / 'web/icons/Icon-192.png': 192,
+            ROOT / 'web/icons/Icon-512.png': 512,
+            ROOT / 'web/icons/Icon-maskable-192.png': 192,
+            ROOT / 'web/icons/Icon-maskable-512.png': 512,
+        })
+        outputs.update(_catalog_outputs('ios/Runner/Assets.xcassets/AppIcon.appiconset'))
+        outputs.update(_catalog_outputs('macos/Runner/Assets.xcassets/AppIcon.appiconset'))
     maskable = {
         path for path in outputs
         if path.name.startswith('Icon-maskable-')
     }
-    _write_outputs(outputs, maskable=maskable)
+    _write_outputs(outputs, maskable=maskable, android=set(android_outputs))
 
 
 if __name__ == '__main__':

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.0-ui.1 — Early access UI checkpoint
+
+- Fix dark input fill/selection and safely inset original in-app/Android launcher marks.
+- Support actual 1×1 Android widgets with responsive compact/full layouts and readable numeric progress.
+- Suggest cadence from remaining work and inclusive deadline days; recalculate native widget suggestions from numeric snapshot fields.
+- Verify actual widget creation, resize, progress update and goal deep-link on emulator; retain physical-device/provider/store gates as pending.
+
+Application package version remains `1.1.0+2`; this prerelease tag identifies the reviewed UI checkpoint separately. HTTPS debug ARM64 artifact, not store-signed. See `docs/delivery/dark-icons-widget-checkpoint.md` for exact evidence and limits.
+
 ## 1.1.0-cloudflare.1 — Early access
 
 - Deploy the existing account/group/shared-quantity core and Flutter web on Cloudflare Workers + D1 at https://its-the-day.himanusia.com.

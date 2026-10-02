@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
-    android:initialLayout="@layout/itstheday_widget"
-    android:minHeight="100dp"
-    android:minWidth="180dp"
+    android:initialLayout="@layout/itstheday_widget_compact"
+    android:minHeight="40dp"
+    android:minResizeHeight="40dp"
+    android:minResizeWidth="40dp"
+    android:minWidth="40dp"
     android:resizeMode="horizontal|vertical"
+    android:targetCellHeight="1"
+    android:targetCellWidth="1"
     android:updatePeriodMillis="1800000"
     android:widgetCategory="home_screen" />

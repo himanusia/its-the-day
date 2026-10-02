@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../domain/goal.dart';
+import '../domain/goal_pace.dart';
 import 'itstheday_controller.dart';
 import 'day_illustrations.dart';
 import 'brand_mark.dart';
@@ -1353,10 +1354,8 @@ int _remaining(Goal goal) =>
 String _countLabel(int count, String unit) => '$count $unit';
 
 String _paceLabel(Goal goal, DateTime now) {
-  final pace = goal.paceAt(now);
-  if (pace == null) return goal.isComplete ? 'complete' : '—';
   final unit = goal.kind == GoalKind.quantity ? goal.unit : 'items';
-  return '$pace $unit/day';
+  return GoalPaceSuggestion.forGoal(goal, now).label(unit);
 }
 
 ClockSparkState _goalClockState(GoalStatus status) => switch (status) {

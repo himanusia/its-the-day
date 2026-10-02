@@ -61,7 +61,7 @@ ThemeData itsthedayDarkTheme() {
     scaffold: ItsTheDayPalette.ink,
     appBarForeground: ItsTheDayPalette.cloud,
     overlayStyle: SystemUiOverlayStyle.light,
-    inputFill: ItsTheDayPalette.surface,
+    inputFill: scheme.surfaceContainerHigh,
     textForeground: const Color(0xFFEAF3ED),
   );
 }
@@ -176,6 +176,13 @@ ThemeData _baseTheme({
         borderSide: BorderSide(color: scheme.error, width: 2),
       ),
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
+    ),
+    textSelectionTheme: TextSelectionThemeData(
+      cursorColor: scheme.primary,
+      selectionColor: scheme.primary.withValues(
+        alpha: brightness == Brightness.dark ? .42 : .3,
+      ),
+      selectionHandleColor: scheme.primary,
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
