@@ -28,12 +28,17 @@ class ClockSparkIllustration extends StatelessWidget {
     return Semantics(
       image: true,
       label: semanticLabel ?? _defaultLabel(state),
-      child: CustomPaint(
-        size: Size.square(size),
-        painter: _ClockSparkPainter(
-          state: state,
-          ink: Theme.of(context).colorScheme.onSurface,
-          paper: Theme.of(context).colorScheme.surface,
+      child: FittedBox(
+        fit: BoxFit.contain,
+        child: SizedBox.square(
+          dimension: size,
+          child: CustomPaint(
+            painter: _ClockSparkPainter(
+              state: state,
+              ink: Theme.of(context).colorScheme.onSurface,
+              paper: Theme.of(context).colorScheme.surface,
+            ),
+          ),
         ),
       ),
     );
@@ -61,15 +66,25 @@ class _ClockSparkPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final shortest = size.shortestSide;
-    final origin = Offset(size.width * .5, size.height * .52);
+    if (shortest <= 0) return;
+
+    // Paint the illustration in a centered square so a tight rectangular
+    // constraint cannot push either original spark outside the canvas.
+    final artSide = shortest * .86;
+    final art = Rect.fromCenter(
+      center: size.center(Offset.zero),
+      width: artSide,
+      height: artSide,
+    );
+    final origin = Offset(art.left + artSide * .5, art.top + artSide * .52);
     final accent = _accent;
     final secondary = _secondary;
-    final stroke = shortest * .055;
+    final stroke = artSide * .055;
 
     final halo = Paint()..color = accent.withValues(alpha: .18);
     canvas.drawCircle(
-      origin.translate(shortest * -.08, shortest * .03),
-      shortest * .38,
+      origin.translate(artSide * -.08, artSide * .03),
+      artSide * .38,
       halo,
     );
 
@@ -77,23 +92,23 @@ class _ClockSparkPainter extends CustomPainter {
     canvas.drawRRect(
       RRect.fromRectAndRadius(
         Rect.fromCenter(
-          center: origin.translate(shortest * .02, shortest * .04),
-          width: shortest * .66,
-          height: shortest * .66,
+          center: origin.translate(artSide * .02, artSide * .04),
+          width: artSide * .66,
+          height: artSide * .66,
         ),
-        Radius.circular(shortest * .18),
+        Radius.circular(artSide * .18),
       ),
       plate,
     );
 
     final face = Paint()..color = paper;
-    canvas.drawCircle(origin, shortest * .235, face);
+    canvas.drawCircle(origin, artSide * .235, face);
     final ring = Paint()
       ..color = ink
       ..style = PaintingStyle.stroke
       ..strokeWidth = stroke
       ..strokeCap = StrokeCap.round;
-    canvas.drawCircle(origin, shortest * .235, ring);
+    canvas.drawCircle(origin, artSide * .235, ring);
 
     final hand = Paint()
       ..color = ink
@@ -108,23 +123,22 @@ class _ClockSparkPainter extends CustomPainter {
     };
     canvas.drawLine(
       origin,
-      origin +
-          Offset(math.cos(handAngle), math.sin(handAngle)) * shortest * .15,
+      origin + Offset(math.cos(handAngle), math.sin(handAngle)) * artSide * .15,
       hand,
     );
-    canvas.drawLine(origin, origin + Offset(0, -shortest * .14), hand);
-    canvas.drawCircle(origin, shortest * .035, Paint()..color = secondary);
+    canvas.drawLine(origin, origin + Offset(0, -artSide * .14), hand);
+    canvas.drawCircle(origin, artSide * .035, Paint()..color = secondary);
 
     _drawSpark(
       canvas,
-      center: Offset(size.width * .77, size.height * .2),
-      radius: shortest * .12,
+      center: Offset(art.left + artSide * .77, art.top + artSide * .2),
+      radius: artSide * .12,
       color: secondary,
     );
     _drawSpark(
       canvas,
-      center: Offset(size.width * .2, size.height * .77),
-      radius: shortest * .065,
+      center: Offset(art.left + artSide * .2, art.top + artSide * .77),
+      radius: artSide * .065,
       color: accent,
     );
 
@@ -136,9 +150,9 @@ class _ClockSparkPainter extends CustomPainter {
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round;
       final path = Path()
-        ..moveTo(size.width * .68, size.height * .72)
-        ..lineTo(size.width * .75, size.height * .79)
-        ..lineTo(size.width * .88, size.height * .63);
+        ..moveTo(art.left + artSide * .68, art.top + artSide * .72)
+        ..lineTo(art.left + artSide * .75, art.top + artSide * .79)
+        ..lineTo(art.left + artSide * .88, art.top + artSide * .63);
       canvas.drawPath(path, check);
     }
   }

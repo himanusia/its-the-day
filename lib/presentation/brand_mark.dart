@@ -15,13 +15,18 @@ class ItsTheDayMark extends StatelessWidget {
     return Semantics(
       image: true,
       label: "It's the Day! mark",
-      child: CustomPaint(
-        size: Size.square(size),
-        painter: const _ItsTheDayMarkPainter(
-          background: ItsTheDayPalette.ink,
-          ring: ItsTheDayPalette.mintStrong,
-          hand: ItsTheDayPalette.mint,
-          spark: ItsTheDayPalette.amber,
+      child: FittedBox(
+        fit: BoxFit.contain,
+        child: SizedBox.square(
+          dimension: size,
+          child: CustomPaint(
+            painter: const _ItsTheDayMarkPainter(
+              background: ItsTheDayPalette.ink,
+              ring: ItsTheDayPalette.mintStrong,
+              hand: ItsTheDayPalette.mint,
+              spark: ItsTheDayPalette.amber,
+            ),
+          ),
         ),
       ),
     );
@@ -45,56 +50,53 @@ class _ItsTheDayMarkPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
     final shortest = size.shortestSide;
-    final radius = shortest * .27;
+    if (shortest <= 0) return;
+
     canvas.drawRRect(
-      RRect.fromRectAndRadius(rect, Radius.circular(radius)),
+      RRect.fromRectAndRadius(rect, Radius.circular(shortest * .27)),
       Paint()..color = background,
     );
-    final center = size.center(Offset.zero);
-    final outer = size.shortestSide * .324;
-    final inner = size.shortestSide * .25;
+
+    // Keep the original geometry inside a centered square. CustomPaint can be
+    // given a rectangular constraint by a tight Row or a narrow launcher slot.
+    final artSide = shortest * .86;
+    final art = Rect.fromCenter(
+      center: size.center(Offset.zero),
+      width: artSide,
+      height: artSide,
+    );
+    final center = art.center;
+    final outer = artSide * .324;
+    final inner = artSide * .25;
     canvas.drawCircle(center, outer, Paint()..color = ring);
     canvas.drawCircle(center, inner, Paint()..color = background);
 
     final handPaint = Paint()
       ..color = hand
       ..strokeCap = StrokeCap.round
-      ..strokeWidth = size.shortestSide * .075;
+      ..strokeWidth = artSide * .075;
+    canvas.drawLine(center, center + Offset(0, -artSide * .17), handPaint);
     canvas.drawLine(
       center,
-      center + Offset(0, -size.shortestSide * .17),
+      center + Offset(artSide * .14, artSide * .08),
       handPaint,
     );
-    canvas.drawLine(
-      center,
-      center + Offset(size.shortestSide * .14, size.shortestSide * .08),
-      handPaint,
-    );
-    canvas.drawCircle(center, size.shortestSide * .052, Paint()..color = spark);
+    canvas.drawCircle(center, artSide * .052, Paint()..color = spark);
 
-    final sparkCenter = Offset(size.width * .76, size.height * .23);
+    final sparkCenter = Offset(
+      art.left + artSide * .76,
+      art.top + artSide * .23,
+    );
     final sparkPaint = Paint()..color = spark;
     final path = Path()
-      ..moveTo(sparkCenter.dx, sparkCenter.dy - shortest * .12)
-      ..lineTo(
-        sparkCenter.dx + shortest * .045,
-        sparkCenter.dy - shortest * .045,
-      )
-      ..lineTo(sparkCenter.dx + shortest * .12, sparkCenter.dy)
-      ..lineTo(
-        sparkCenter.dx + shortest * .045,
-        sparkCenter.dy + shortest * .045,
-      )
-      ..lineTo(sparkCenter.dx, sparkCenter.dy + shortest * .12)
-      ..lineTo(
-        sparkCenter.dx - shortest * .045,
-        sparkCenter.dy + shortest * .045,
-      )
-      ..lineTo(sparkCenter.dx - shortest * .12, sparkCenter.dy)
-      ..lineTo(
-        sparkCenter.dx - shortest * .045,
-        sparkCenter.dy - shortest * .045,
-      )
+      ..moveTo(sparkCenter.dx, sparkCenter.dy - artSide * .12)
+      ..lineTo(sparkCenter.dx + artSide * .045, sparkCenter.dy - artSide * .045)
+      ..lineTo(sparkCenter.dx + artSide * .12, sparkCenter.dy)
+      ..lineTo(sparkCenter.dx + artSide * .045, sparkCenter.dy + artSide * .045)
+      ..lineTo(sparkCenter.dx, sparkCenter.dy + artSide * .12)
+      ..lineTo(sparkCenter.dx - artSide * .045, sparkCenter.dy + artSide * .045)
+      ..lineTo(sparkCenter.dx - artSide * .12, sparkCenter.dy)
+      ..lineTo(sparkCenter.dx - artSide * .045, sparkCenter.dy - artSide * .045)
       ..close();
     canvas.drawPath(path, sparkPaint);
   }
