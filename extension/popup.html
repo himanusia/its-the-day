@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>It's the Day! — hosted companion</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="popup-shell">
+      <header class="brand-lockup">
+        <img class="brand-mark" src="assets/its_the_day_mark.svg" alt="">
+        <div>
+          <p class="eyebrow">Hosted companion</p>
+          <h1>It's the Day!</h1>
+        </div>
+      </header>
+
+      <p class="lead">A small doorway to the place where your day lives.</p>
+
+      <section class="boundary-card" aria-labelledby="boundary-heading">
+        <div class="boundary-label">Hosted web app</div>
+        <h2 id="boundary-heading">Your account stays online</h2>
+        <p>Accounts, groups, and progress live in the hosted app. This companion does not copy or sync your data.</p>
+      </section>
+
+      <button id="open-app" class="open-button" type="button" aria-describedby="open-help status">
+        <span>Open It's the Day!</span>
+        <span class="button-arrow" aria-hidden="true">↗</span>
+      </button>
+      <p id="open-help" class="helper">Opens the secure site in a browser tab. No account state is stored here.</p>
+      <p id="status" class="status" role="status" aria-live="polite">Ready to open the hosted app.</p>
+    </main>
+
+    <script src="navigation.js" defer></script>
+    <script src="popup.js" defer></script>
+  </body>
+</html>

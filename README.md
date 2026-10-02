@@ -4,11 +4,29 @@ An Android-first countdown app for events, H-7/H-3/H-1/H-0 reminders, a home-scr
 
 ## Current checkpoint boundaries
 
-Quantity/checklist goals, Android widget goal focus, original Android/iOS/macOS/web icons, and the account client are implemented. Better Auth email/password is locally tested; Google account login integration is setup-gated and not live-verified. The group client remains explicitly unavailable, and signing in does not synchronize local goals. No production deployment, iOS widget, offline reconciliation, or realtime delivery is claimed.
+**Web + API are live at https://its-the-day.himanusia.com**, on Cloudflare Workers + Hono + Better Auth + D1 with same-origin Workers Static Assets. Email sessions, groups and shared quantity create/read/add are verified against remote D1. Browser secure cookies/CSRF/reload/sign-out, native emulator sign-in/cold restart/sign-out, and the MV3 companion popup are tested. Local goals remain local; signing in does not upload them. Google login remains setup-needed. Alarms, iOS widget, offline reconciliation, realtime, store release and full physical QA are not complete. The physical phone was absent in ADB, so its previous loopback-configured APK has not been replaced with this HTTPS build.
 
-See `server/README.md` for local migrations/auth/provider setup. For local account testing, build Android with `--dart-define=GROUPS_API_URL=http://10.0.2.2:8787` or iOS simulator with `--dart-define=GROUPS_API_URL=http://127.0.0.1:8787`. Web auth requires same-origin cookies. Account login does not request Calendar scopes.
+See [deployment evidence](docs/delivery/cloudflare-online-checkpoint.md) and [Cloudflare runbook](server/docs/cloudflare-online-runbook.md). Build Android with `--dart-define=GROUPS_API_URL=https://its-the-day.himanusia.com`; no Mac backend or ADB reverse is needed. Flutter web defaults to same-origin secure cookies. Account login does not request Calendar scopes.
 
 Regenerate launcher assets with `uv run --with Pillow==12.3.0 python tool/generate_icons.py`.
+
+### Online artifacts and commands
+
+```bash
+flutter build web --no-pub --release
+JAVA_HOME=/opt/homebrew/opt/openjdk@21 flutter build apk --debug --no-pub \
+  --split-per-abi --target-platform android-arm64 \
+  --dart-define=GROUPS_API_URL=https://its-the-day.himanusia.com
+flutter test --no-pub --dart-define=ITD_REMOTE_E2E=true \
+  test/group_membership_remote_e2e_test.dart
+```
+
+The remote test creates synthetic QA accounts/records on the authorized deployment and signs out its sessions; it does not upload local device data. APK: `build/app/outputs/flutter-apk/app-arm64-v8a-debug.apk` (debug-signed ARM64, not a Play Store build). Use serial-scoped `adb install -r` on an authorized connected phone to preserve data. Do not uninstall on a signing mismatch.
+
+Chrome MV3 companion: `cd extension && npm test && python3 scripts/package.py`. Load `extension/` unpacked through `chrome://extensions` in Developer mode. ZIP: `extension/dist/its-the-day-chrome-companion-v1.0.0.zip`. It opens/reuses the hosted web app, not a full Flutter-embedded popup; no account/token state is stored in the extension. Personal Chrome was not touched; no Web Store publication.
+
+Google Web redirect: `https://its-the-day.himanusia.com/api/auth/callback/google`. The Android OAuth client is not a substitute for the Web ID/secret. Worker secret names are `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`; native `GOOGLE_SERVER_CLIENT_ID` receives the Web ID. Never embed the secret/OAuth JSON in the APK or repository.
+
 
 ## Current scope
 
@@ -75,17 +93,17 @@ The display name and current package/repository slug are **It's the Day!**.
 - Checklist goals support named items, optional explanations, exactly-once checking, and reversible unchecking.
 - Widget state is stored in Android `SharedPreferences`; a selected countdown remains the primary widget card and the first goal is used when no countdown exists.
 - `MemoryEventRepository` exists for deterministic tests/previews. Web uses the local repository path and explicitly omits native widgets/calendar/reminder integrations without crashing.
-- A local-testable Hono/D1-shaped groups API lives under `server/`; it covers private/shared goals, membership authorization, actor attribution, and idempotency. Its test verifier and SQLite adapter are not production auth.
-- The UI includes setup-needed/offline/permission-denied states for groups and stores mobile session tokens only behind secure storage. Better Auth/provider/deployment setup remains explicit and unconfigured.
+- The Hono/Better Auth API under `server/` is deployed on Cloudflare Workers with real D1. Its test verifier and SQLite adapter are unit-test fixtures, not deployed auth. Business data remains authoritative in D1.
+- Group UI supports create/join/list/members and shared-total quantity create/read/add. Native sessions use secure storage; web uses HttpOnly cookies. Provider setup is explicit; Google is still unconfigured. Local goals are not silently synced.
 
-### Still required before online release
+### Remaining online feature/operations gates
 
-- Configure and independently verify Better Auth, its D1 adapter/schema, Google identity provider, bearer sessions, origins, rate limits, observability, migrations, and deployment bindings out of band.
+- Complete Google Web OAuth configuration and native/browser provider verification. Existing core email auth, D1 migrations/bindings, native bearer and browser-cookie flows have live evidence; provider success is not inferred from those tests.
 - Add production notification/realtime/offline queue operations and complete emulator/physical-device/release QA. The web app provides in-app cards and local reload persistence; it does not claim native home-screen widgets.
 
 ### Target backend
 
-The planned server stack is:
+The deployed core is Workers + Hono + Better Auth + D1 + Workers Static Assets. The wider target stack below includes planned alarm/realtime/photo/delivery components, not deployed proof of them:
 
 - **Cloudflare Workers + Hono**: typed HTTP/API layer.
 - **Better Auth**: server-side identity, Google sign-in, account linking, and session lifecycle mounted in Hono. It is not a Flutter package and never runs with mobile client secrets.
@@ -106,17 +124,17 @@ Better Auth is a TypeScript server library, so the Flutter app integrates with i
 4. The Flutter client stores only the Better Auth session/bearer token in platform secure storage and attaches it to Hono API requests.
 5. The Worker uses Better Auth session validation before reading or mutating private/shared alarm data.
 
-The Better Auth bearer plugin is the intended mobile transport. Browser cookies remain appropriate for a future web client. Google Calendar authorization stays separate and incremental: account sign-in starts with identity scopes, while `calendar.events.readonly` is requested only when the user connects Calendar.
+The Better Auth bearer plugin is the implemented mobile transport. Same-origin secure browser cookies are implemented and live-tested. Google Calendar authorization stays separate and incremental: account sign-in starts with identity scopes, while `calendar.events.readonly` is requested only when the user connects Calendar.
 
 ## TODO / not finished
 
 ### Cloudflare backend and identity
 
 - [x] Create a separate `server/` Cloudflare Worker using Hono and Wrangler.
-- [x] Add Better Auth to the Hono Worker and mount `/api/auth/*`; local email/password sessions are tested. Production/provider setup remains unconfigured.
-- [ ] Validate a D1-compatible Better Auth adapter (including schema generation/migrations) against local and deployed Workers before production use.
+- [x] Add Better Auth to the Hono Worker and mount `/api/auth/*`; email/password is live-tested on Cloudflare. Google provider remains unconfigured.
+- [x] Validate Better Auth/D1 migrations and core sessions/groups/quantity against local and deployed Workers; full production maturity is separate.
 - [ ] Add Google account authentication/token verification for Flutter without storing the Google client secret in the mobile app.
-- [x] Add a secure Flutter session-token client boundary; web cookie transport and Better Auth sign-in remain setup-needed.
+- [x] Secure native bearer storage and same-origin HttpOnly/Secure browser cookie transport; live core email journeys verified.
 - [x] Add D1 migrations for accounts, groups, memberships, private/shared goals, progress, checklist state, and idempotency records.
 - [x] Add server-side authorization: private goals are owner-only; shared goals require active group membership and role checks.
 - [x] Add idempotency keys on group creation, goal creation, and progress mutations plus retry tests; durable outbox/retry delivery remains pending.
@@ -145,8 +163,9 @@ The Better Auth bearer plugin is the intended mobile transport. Browser cookies 
 
 ### Release and operations
 
-- [ ] Add Cloudflare environment bindings/secrets without committing credentials.
-- [ ] Add server integration tests against local D1/Workers test runtime.
-- [ ] Add migration/backup/restore and observability runbooks.
+- [x] Configure Cloudflare D1/ASSETS/rate-limit bindings and private Better Auth secret; values are not in source.
+- [x] Run explicit local Worker/D1 and remote HTTPS/D1 integration tests; opt-in skips are not runtime evidence.
+- [x] Add migration, Worker-only rollback and observability runbook.
+- [ ] Rehearse D1 backup/restore independently of Worker rollback.
 - [ ] Run multi-account security tests before calling shared alarms production-ready.
 - [ ] Complete physical Android device QA after the backend/auth slice is implemented.

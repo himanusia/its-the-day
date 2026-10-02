@@ -10,7 +10,11 @@ npm run typecheck
 npm test
 ```
 
-The tests use Node's in-memory SQLite adapter with the Cloudflare D1 `prepare`/`all`/`batch`/`exec` surface. They exercise real Better Auth email/password sign-up, sign-in, bearer-session lookup, sign-out, two-account membership authorization, private access, revocation, revoked-code rejoin blocking, concurrent idempotent progress, request binding conflicts, strict date/URL validation, individual totals, shared totals, and checklist toggling.
+The tests use Node's in-memory SQLite adapter with the Cloudflare D1 `prepare`/`all`/`batch`/`exec` surface. They exercise real Better Auth email/password sign-up, sign-in, bearer-session lookup, secure same-origin cookies, sign-out, two-account membership authorization, private access, revocation, revoked-code rejoin blocking, concurrent idempotent progress, request binding conflicts, strict date/URL validation, individual totals, shared totals, and checklist toggling.
+
+The default Worker entrypoint delegates only non-API 404 responses to the `ASSETS` binding. `/api` and unknown `/api/*` responses stay Worker-owned 404s. Wrangler's `404-page` asset policy prevents an unknown document or asset from becoming the Flutter `index.html` shell. The configured asset directory is `../build/web`, supplied by the parent Flutter build lane.
+
+The production deployment surface and owner-run migration/secret/dry-run/deploy/rollback steps are in [`docs/cloudflare-online-runbook.md`](docs/cloudflare-online-runbook.md).
 
 ## Better Auth runtime
 
@@ -18,21 +22,24 @@ The default `createApp()` path creates Better Auth from the request's Worker bin
 
 - `DB`: a real D1 binding (including `batch()` and `exec()`);
 - `BETTER_AUTH_SECRET`: a locally supplied secret of at least 32 characters; never commit or print it;
-- optionally `BETTER_AUTH_URL`, which should be the exact API origin in deployed environments;
+- `AUTH_RATE_LIMITER` when `BETTER_AUTH_URL` is HTTPS. This is the Cloudflare Rate Limiting binding used for public auth; it replaces Better Auth's isolate-local memory limiter in the Worker path;
+- optionally `BETTER_AUTH_URL`, which should be the exact same-origin URL in deployed environments;
 - optionally `BETTER_AUTH_TRUSTED_ORIGINS`, a comma-separated list for explicitly allowed browser origins.
 
-Auth routes are mounted at `/api/auth/*`. Email/password routes are supplied by Better Auth. Native clients use Better Auth's `bearer()` plugin and the `set-auth-token` response header; browsers use the normal Better Auth cookie. Passwords are sent from the app's sign-up/sign-in form and are never stored by the groups API code.
+Public sign-up/sign-in/password-reset auth is limited by a key built from the fixed auth route and Cloudflare's `CF-Connecting-IP` header. The Worker rejects missing or malformed trusted IP input when the binding is present, never falls back to `X-Forwarded-For`, and never keeps a module-level request counter. Better Auth is configured to read only `cf-connecting-ip` for its own request metadata. Rate-limit failures and unexpected errors use generic response bodies without tokens, passwords, IPs, or exception details.
+
+Auth routes are mounted at `/api/auth/*`. Native clients use Better Auth's `bearer()` plugin and the `set-auth-token` response header; browsers use the normal Better Auth cookie. HTTPS deployments force secure cookies and same-origin trusted origins. Passwords are sent from the app's sign-up/sign-in form and are never stored by the groups API code.
 
 Google is optional. Set both `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` out of band to enable it. If either value is absent, `/health` reports `google: setup_needed`; no provider secret is fabricated.
 
 The checked-in migrations include the Better Auth core tables and application tables:
 
 ```bash
-npx wrangler d1 migrations apply its-the-day-groups --local
+npm exec -- wrangler d1 migrations apply its-the-day-groups --local
 # Use the same command with the configured remote D1 target only after operator setup.
 ```
 
-`wrangler.jsonc` enables `nodejs_compat`, which Better Auth requires for Cloudflare Workers. Schema ownership is explicit in `migrations/0001_groups.sql` and the additive hardening changes in `migrations/0002_online_hardening.sql`.
+`wrangler.jsonc` pins the Worker name, `its-the-day.himanusia.com` custom domain, `../build/web` Static Assets, `404-page` unknown-asset behavior, API-first routing, the verified remote D1 binding, and `AUTH_RATE_LIMITER` namespace `20491002` (verified unused across the 19 existing Workers at provisioning). The production variables set the same-origin `BETTER_AUTH_URL` and `BETTER_AUTH_TRUSTED_ORIGINS`.
 
 ## API and idempotency contract
 
@@ -56,4 +63,8 @@ For a same-origin web deployment, the client may use an empty/relative API base 
 
 ## Remaining operational setup
 
-Configure a real D1 database ID, a secret through the Worker secret store, trusted web origins, optional Google credentials, HTTPS/custom domain, rate limiting/IP forwarding, logging/redaction, migration backup/restore, and deployment/rollback observability before production release. Local D1-shaped tests prove the auth/API contract; they do not prove a deployed Worker or provider configuration.
+The server implementation is bounded to the existing account/group/shared-goal core. It does not add alarms, notifications, realtime, offline outbox, or provider setup. Before online release, the owner must resolve the remote D1 ID, allocate the account-unique rate-limit namespace, store the named Better Auth secret, run migrations, confirm the custom-domain collision/readback, and perform the runbook's HTTPS/auth/API/static smoke checks.
+
+Google remains optional and honest: both web credential names must be supplied out of band or `/health` stays `google: setup_needed`. The Android OAuth client file is not read by this Worker and no Google secret is checked in.
+
+Use [`docs/cloudflare-online-runbook.md`](docs/cloudflare-online-runbook.md) for the exact migration, named-secret, dry-run, deploy, readback, and Worker-only rollback sequence. Local D1-shaped tests prove the auth/API contract; they do not prove a deployed Worker, D1 binding, custom domain, rate-limit namespace, or provider configuration.

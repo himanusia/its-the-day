@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import type { Context } from 'hono';
+import type { Context, Next } from 'hono';
 import { betterAuth } from 'better-auth';
 import type { BetterAuthOptions, D1Database } from 'better-auth';
 import { bearer } from 'better-auth/plugins';
@@ -43,8 +43,14 @@ export type SessionVerifier = (
   env?: Bindings,
 ) => Promise<Identity | null>;
 
+export interface RateLimiter {
+  limit(input: { key: string }): Promise<{ success: boolean }>;
+}
+
 export type Bindings = {
   DB: Database;
+  ASSETS?: Fetcher;
+  AUTH_RATE_LIMITER?: RateLimiter;
   BETTER_AUTH_SECRET?: string;
   BETTER_AUTH_URL?: string;
   BETTER_AUTH_TRUSTED_ORIGINS?: string;
@@ -250,12 +256,14 @@ function reply(
 
 function betterAuthConfigured(env: Bindings | undefined): boolean {
   if (!env) return false;
+  const httpsOrigin = text(env.BETTER_AUTH_URL).startsWith('https://');
   return (
     typeof env.BETTER_AUTH_SECRET === 'string' &&
     env.BETTER_AUTH_SECRET.trim().length >= 32 &&
     typeof env.DB?.prepare === 'function' &&
     typeof env.DB?.batch === 'function' &&
-    typeof env.DB?.exec === 'function'
+    typeof env.DB?.exec === 'function' &&
+    (!httpsOrigin || hasRateLimiter(env))
   );
 }
 
@@ -268,6 +276,109 @@ function configuredOrigins(env: Bindings | undefined): string[] {
   return values
     .map((value) => value?.trim() ?? '')
     .filter((value) => value.length > 0);
+}
+
+function isMutationMethod(method: string): boolean {
+  return ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase());
+}
+
+function isPureNativeBearerRequest(request: Request): boolean {
+  const authorization = request.headers.get('authorization')?.trim() ?? '';
+  return !request.headers.has('cookie') && /^Bearer\s+\S+$/i.test(authorization);
+}
+
+/**
+ * Browser cookie mutations use an exact configured Origin. Referer is
+ * intentionally not a fallback: it is not an origin assertion. A request
+ * with only Better Auth's native bearer transport remains usable without an
+ * Origin header; a cookie plus bearer request is treated as browser-bound.
+ */
+function mutationOriginAllowed(request: Request, env: Bindings | undefined): boolean {
+  if (!isMutationMethod(request.method) || isPureNativeBearerRequest(request)) {
+    return true;
+  }
+  // Let unauthenticated requests reach the normal 401 path. Any request that
+  // carries a cookie is browser-bound and must prove its configured Origin.
+  if (!request.headers.has('cookie')) return true;
+  const origin = request.headers.get('origin');
+  if (!origin || origin === 'null') return false;
+  let actual: URL;
+  try {
+    actual = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (actual.origin !== origin) return false;
+  return configuredOrigins(env).some((configured) => {
+    try {
+      const expected = new URL(configured);
+      return (
+        expected.origin === actual.origin &&
+        expected.username.length === 0 &&
+        expected.password.length === 0 &&
+        (expected.pathname === '/' || expected.pathname === '')
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
+function hasRateLimiter(env: Bindings | undefined): boolean {
+  return typeof env?.AUTH_RATE_LIMITER?.limit === 'function';
+}
+
+function validIpv4(value: string): boolean {
+  const parts = value.split('.');
+  return (
+    parts.length === 4 &&
+    parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255)
+  );
+}
+
+function validIp(value: string): boolean {
+  if (validIpv4(value)) return true;
+  if (!value.includes(':')) return false;
+  try {
+    const hostname = new URL(`http://[${value}]/`).hostname;
+    return hostname.startsWith('[') && hostname.endsWith(']');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Cloudflare overwrites CF-Connecting-IP at the edge. Do not fall back to
+ * X-Forwarded-For or a module-level counter: the former is caller-controlled
+ * here and the latter is isolate-local rather than a CF-distributed limiter.
+ */
+function trustedClientIp(request: Request): string | null {
+  const value = request.headers.get('CF-Connecting-IP')?.trim() ?? '';
+  if (
+    value.length === 0 ||
+    value.length > 128 ||
+    /[\s,]/.test(value) ||
+    !validIp(value)
+  ) {
+    return null;
+  }
+  return value;
+}
+
+function isPublicAuthRequest(method: string, path: string): boolean {
+  if (method.toUpperCase() !== 'POST') return false;
+  return (
+    path === '/api/auth/sign-up/email' ||
+    path.startsWith('/api/auth/sign-in/') ||
+    path === '/api/auth/request-password-reset' ||
+    path === '/api/auth/reset-password' ||
+    path === '/api/auth/send-verification-email'
+  );
+}
+
+function authRateLimitKey(request: Request, clientIp: string): string {
+  const url = new URL(request.url);
+  return `auth:${request.method.toUpperCase()}:${url.pathname}:${clientIp}`;
 }
 
 function createBetterAuth(env: Bindings | undefined): BetterAuthLike | null {
@@ -293,7 +404,15 @@ function createBetterAuth(env: Bindings | undefined): BetterAuthLike | null {
     // The bearer plugin is Better Auth's supported native/mobile transport.
     // Browser callers continue to use the normal Better Auth cookie.
     plugins: [bearer()],
+    // The public auth limiter is the production rate-limit boundary. Keep
+    // Better Auth's default isolate-local memory store disabled; the Worker
+    // must use Cloudflare's distributed binding instead.
+    rateLimit: { enabled: false },
+    logger: { disabled: true },
     advanced: {
+      // Cloudflare supplies this header at the edge. Do not trust a forwarded
+      // chain from a caller-controlled origin.
+      ipAddress: { ipAddressHeaders: ['cf-connecting-ip'] },
       // Core Better Auth tables are managed by the checked-in D1 migrations.
       // D1 schema validation is disabled because Worker startup must not issue
       // an introspection round-trip on every per-request auth instance.
@@ -664,6 +783,8 @@ export function createApp(
   const testVerifier =
     typeof options === 'function' ? options : options.sessionVerifier;
 
+  app.onError((_error, c) => c.json({ error: 'internal_error' }, 500));
+
   app.get('/health', (c) => {
     const googleConfigured =
       text(c.env?.GOOGLE_CLIENT_ID) !== '' &&
@@ -680,6 +801,9 @@ export function createApp(
   });
 
   const authHandler = async (c: AppContext) => {
+    if (!mutationOriginAllowed(c.req.raw, c.env)) {
+      return c.json({ error: 'invalid_origin' }, 403);
+    }
     const auth = createBetterAuth(c.env);
     if (!auth) return c.json(setupNeeded, 503);
     try {
@@ -688,17 +812,47 @@ export function createApp(
       return c.json({ error: 'auth_unavailable' }, 503);
     }
   };
-  app.all('/api/auth', authHandler);
-  app.all('/api/auth/*', authHandler);
 
-  app.use('/api/*', async (c, next) => {
-    // Better Auth routes above own their session/cookie lifecycle.
-    if (c.req.path === '/api/auth' || c.req.path.startsWith('/api/auth/')) {
+  const rateLimitPublicAuth = async (c: AppContext, next: Next) => {
+    if (!isPublicAuthRequest(c.req.method, c.req.path)) {
       await next();
       return;
     }
+    if (!hasRateLimiter(c.env)) {
+      // HTTPS deployments fail closed rather than silently using an
+      // isolate-local fallback. Local HTTP tests may omit the binding.
+      if (text(c.env.BETTER_AUTH_URL).startsWith('https://')) {
+        return c.json(setupNeeded, 503);
+      }
+      await next();
+      return;
+    }
+    const clientIp = trustedClientIp(c.req.raw);
+    if (!clientIp) return c.json({ error: 'auth_unavailable' }, 503);
+    try {
+      const outcome = await c.env.AUTH_RATE_LIMITER!.limit({
+        key: authRateLimitKey(c.req.raw, clientIp),
+      });
+      if (!outcome.success) {
+        return c.json({ error: 'rate_limited' }, 429, { 'Retry-After': '60' });
+      }
+    } catch {
+      return c.json({ error: 'auth_unavailable' }, 503);
+    }
+    await next();
+  };
+
+  app.use('/api/auth', rateLimitPublicAuth);
+  app.use('/api/auth/*', rateLimitPublicAuth);
+  app.all('/api/auth', authHandler);
+  app.all('/api/auth/*', authHandler);
+
+  const authenticateApi = async (c: AppContext, next: Next) => {
     if (!testVerifier && !betterAuthConfigured(c.env)) {
       return c.json(setupNeeded, 503);
+    }
+    if (!mutationOriginAllowed(c.req.raw, c.env)) {
+      return c.json({ error: 'invalid_origin' }, 403);
     }
     let identity: Identity | null;
     try {
@@ -719,7 +873,15 @@ export function createApp(
       now(),
     );
     await next();
-  });
+  };
+
+  // Protect only known API families. Unknown /api paths must reach Hono's
+  // 404 handler and must never fall through to the static asset shell.
+  app.use('/api/session', authenticateApi);
+  app.use('/api/groups', authenticateApi);
+  app.use('/api/groups/*', authenticateApi);
+  app.use('/api/goals', authenticateApi);
+  app.use('/api/goals/*', authenticateApi);
 
   app.get('/api/session', (c) =>
     c.json({
@@ -1779,4 +1941,62 @@ export function createApp(
   return app;
 }
 
-export default createApp();
+const app = createApp();
+
+function isCanonicalApiPath(pathname: string): boolean {
+  return pathname === '/api' || pathname.startsWith('/api/');
+}
+
+function partiallyDecodePath(pathname: string): string {
+  try {
+    return decodeURIComponent(pathname);
+  } catch {
+    // A malformed escape is still ambiguous when its valid prefix decodes to
+    // /api. Decode valid byte escapes only so the Worker can fail closed.
+    return pathname.replace(/%([0-9a-f]{2})/gi, (_match, hex: string) =>
+      String.fromCharCode(Number.parseInt(hex, 16)),
+    );
+  }
+}
+
+function isApiPath(pathname: string): boolean {
+  let candidate = pathname;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    if (isCanonicalApiPath(candidate) || candidate.startsWith('/api%')) {
+      return true;
+    }
+    if (!candidate.includes('%')) return false;
+    const decoded = partiallyDecodePath(candidate);
+    if (decoded === candidate) return candidate.startsWith('/api%');
+    candidate = decoded;
+  }
+  return isCanonicalApiPath(candidate) || candidate.startsWith('/api%');
+}
+
+/**
+ * Cloudflare runs API/auth through the Worker first and delegates only a
+ * non-API 404 to Static Assets. `not_found_handling: 404-page` in wrangler
+ * keeps missing documents from becoming the Flutter index.html shell.
+ */
+export const worker: ExportedHandler<Bindings> = {
+  async fetch(request, env, ctx) {
+    const pathname = new URL(request.url).pathname;
+    if (isApiPath(pathname) && !isCanonicalApiPath(pathname)) {
+      return new Response('404 Not Found', { status: 404 });
+    }
+    const response = await app.fetch(request, env, ctx);
+    if (isApiPath(pathname) || response.status !== 404 || !env.ASSETS) {
+      return response;
+    }
+    try {
+      return await env.ASSETS.fetch(request);
+    } catch {
+      return new Response(JSON.stringify({ error: 'asset_unavailable' }), {
+        status: 502,
+        headers: { 'content-type': 'application/json; charset=UTF-8' },
+      });
+    }
+  },
+};
+
+export default worker;
