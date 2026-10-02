@@ -67,6 +67,28 @@ test('Worker gives API and auth paths priority over static assets', async () => 
   assert.equal(assets.calls.includes('/api'), false);
 });
 
+test('encoded API-looking paths fail closed instead of reaching static assets', async () => {
+  const assets = assetsFixture();
+  const paths = [
+    '/api%2Fdoes-not-exist',
+    '/%61pi/does-not-exist',
+    '/api%252Fdoes-not-exist',
+    '/%2561pi/does-not-exist',
+  ];
+
+  for (const path of paths) {
+    const response = await worker.fetch(
+      new Request(`https://its-the-day.himanusia.com${path}`),
+      { DB: fakeDb(), ASSETS: assets },
+      executionContext(),
+    );
+    assert.equal(response.status, 404, path);
+    assert.equal(await response.text(), '404 Not Found', path);
+  }
+
+  assert.deepEqual(assets.calls, []);
+});
+
 test('missing document assets remain 404 instead of becoming the Flutter HTML shell', async () => {
   const assets = assetsFixture();
   const response = await worker.fetch(
@@ -92,9 +114,13 @@ test('Wrangler config pins static hosting, same-origin auth, custom domain, D1 a
   assert.match(configText, /"custom_domain"\s*:\s*true/);
   assert.match(configText, /"BETTER_AUTH_URL"\s*:\s*"https:\/\/its-the-day\.himanusia\.com"/);
   assert.match(configText, /"BETTER_AUTH_TRUSTED_ORIGINS"\s*:\s*"https:\/\/its-the-day\.himanusia\.com"/);
-  assert.match(configText, /"database_id"\s*:\s*"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"/);
+  assert.match(configText, /"workers_dev"\s*:\s*false/);
+  assert.match(configText, /"preview_urls"\s*:\s*false/);
+  assert.match(configText, /"database_id"\s*:\s*"7749ee2c-770a-4463-be77-cdb492846bed"/);
   assert.match(configText, /"name"\s*:\s*"AUTH_RATE_LIMITER"/);
-  assert.match(configText, /"namespace_id"\s*:\s*"[1-9]\d*"/);
+  assert.match(configText, /"namespace_id"\s*:\s*"20491002"/);
+  assert.match(configText, /"redact_query_string"\s*:\s*true/);
+  assert.match(configText, /"logs"\s*:\s*\{[\s\S]*"invocation_logs"\s*:\s*false/);
 });
 
 test('health keeps Google explicitly setup-needed without Web OAuth credentials', async () => {
@@ -145,6 +171,35 @@ test('public auth rate limiting uses the Cloudflare client IP and never an isola
   assert.equal(calls.length, 1);
   assert.match(calls[0].key, /^auth:POST:\/api\/auth\/sign-in\/email:198\.51\.100\.7$/);
   assert.equal(calls[0].key.includes('203.0.113.99'), false);
+});
+
+test('public auth rate limiting covers Better Auth 1.7.6 request-password-reset, not obsolete forget-password', async () => {
+  const calls = [];
+  const appEnv = {
+    DB: fakeDb(),
+    AUTH_RATE_LIMITER: {
+      async limit(input) {
+        calls.push(input);
+        return { success: true };
+      },
+    },
+  };
+
+  for (const path of ['/api/auth/request-password-reset', '/api/auth/forget-password']) {
+    const response = await worker.fetch(
+      new Request(`https://its-the-day.himanusia.com${path}`, {
+        method: 'POST',
+        headers: { 'cf-connecting-ip': '198.51.100.11' },
+      }),
+      appEnv,
+      executionContext(),
+    );
+    assert.equal(response.status, 503, path);
+  }
+
+  assert.deepEqual(calls.map((call) => call.key), [
+    'auth:POST:/api/auth/request-password-reset:198.51.100.11',
+  ]);
 });
 
 test('public auth rate limiting fails closed without a trustworthy Cloudflare IP', async () => {

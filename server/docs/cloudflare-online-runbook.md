@@ -11,6 +11,8 @@ This runbook is for the owner/ops lane. The server implementation does not provi
 - Rate-limit binding: `AUTH_RATE_LIMITER`, configured for 10 calls per 60 seconds; namespace `20491002` was verified unused across all 19 existing Worker bindings in the target account.
 - Production nonsecret variables are checked in as `BETTER_AUTH_URL=https://its-the-day.himanusia.com` and `BETTER_AUTH_TRUSTED_ORIGINS=https://its-the-day.himanusia.com`.
 - Static routing is intentionally strict: `/api` and unknown `/api/*` remain Worker 404s; a non-API 404 is delegated to `ASSETS`; `not_found_handling=404-page` prevents missing files from becoming `index.html`.
+- Encoded or double-encoded API-looking paths fail closed as Worker 404s and are never delegated to `ASSETS`. Browser-cookie mutations require an exact configured `Origin`; `Referer` is not a fallback. Native requests carrying only a Better Auth bearer token may omit `Origin`, while cookie-plus-bearer requests remain browser-bound.
+- Observability uses Wrangler's installed schema with `redact_query_string=true` and `logs.invocation_logs=false`. Better Auth's logger is disabled, and no email reset/verification callback or `sendMail` provider is configured; application code must not log secrets or token-bearing paths.
 - The Worker keeps the existing Better Auth routes, native bearer transport, browser cookie transport, groups, and shared-goal API contracts. Alarms, notifications, realtime, offline outbox, and Google provider setup are outside this slice.
 
 ## Local gates and dry run

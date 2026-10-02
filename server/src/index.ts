@@ -278,6 +278,52 @@ function configuredOrigins(env: Bindings | undefined): string[] {
     .filter((value) => value.length > 0);
 }
 
+function isMutationMethod(method: string): boolean {
+  return ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase());
+}
+
+function isPureNativeBearerRequest(request: Request): boolean {
+  const authorization = request.headers.get('authorization')?.trim() ?? '';
+  return !request.headers.has('cookie') && /^Bearer\s+\S+$/i.test(authorization);
+}
+
+/**
+ * Browser cookie mutations use an exact configured Origin. Referer is
+ * intentionally not a fallback: it is not an origin assertion. A request
+ * with only Better Auth's native bearer transport remains usable without an
+ * Origin header; a cookie plus bearer request is treated as browser-bound.
+ */
+function mutationOriginAllowed(request: Request, env: Bindings | undefined): boolean {
+  if (!isMutationMethod(request.method) || isPureNativeBearerRequest(request)) {
+    return true;
+  }
+  // Let unauthenticated requests reach the normal 401 path. Any request that
+  // carries a cookie is browser-bound and must prove its configured Origin.
+  if (!request.headers.has('cookie')) return true;
+  const origin = request.headers.get('origin');
+  if (!origin || origin === 'null') return false;
+  let actual: URL;
+  try {
+    actual = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (actual.origin !== origin) return false;
+  return configuredOrigins(env).some((configured) => {
+    try {
+      const expected = new URL(configured);
+      return (
+        expected.origin === actual.origin &&
+        expected.username.length === 0 &&
+        expected.password.length === 0 &&
+        (expected.pathname === '/' || expected.pathname === '')
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
 function hasRateLimiter(env: Bindings | undefined): boolean {
   return typeof env?.AUTH_RATE_LIMITER?.limit === 'function';
 }
@@ -324,7 +370,7 @@ function isPublicAuthRequest(method: string, path: string): boolean {
   return (
     path === '/api/auth/sign-up/email' ||
     path.startsWith('/api/auth/sign-in/') ||
-    path === '/api/auth/forget-password' ||
+    path === '/api/auth/request-password-reset' ||
     path === '/api/auth/reset-password' ||
     path === '/api/auth/send-verification-email'
   );
@@ -755,6 +801,9 @@ export function createApp(
   });
 
   const authHandler = async (c: AppContext) => {
+    if (!mutationOriginAllowed(c.req.raw, c.env)) {
+      return c.json({ error: 'invalid_origin' }, 403);
+    }
     const auth = createBetterAuth(c.env);
     if (!auth) return c.json(setupNeeded, 503);
     try {
@@ -801,6 +850,9 @@ export function createApp(
   const authenticateApi = async (c: AppContext, next: Next) => {
     if (!testVerifier && !betterAuthConfigured(c.env)) {
       return c.json(setupNeeded, 503);
+    }
+    if (!mutationOriginAllowed(c.req.raw, c.env)) {
+      return c.json({ error: 'invalid_origin' }, 403);
     }
     let identity: Identity | null;
     try {
@@ -1891,8 +1943,34 @@ export function createApp(
 
 const app = createApp();
 
-function isApiPath(pathname: string): boolean {
+function isCanonicalApiPath(pathname: string): boolean {
   return pathname === '/api' || pathname.startsWith('/api/');
+}
+
+function partiallyDecodePath(pathname: string): string {
+  try {
+    return decodeURIComponent(pathname);
+  } catch {
+    // A malformed escape is still ambiguous when its valid prefix decodes to
+    // /api. Decode valid byte escapes only so the Worker can fail closed.
+    return pathname.replace(/%([0-9a-f]{2})/gi, (_match, hex: string) =>
+      String.fromCharCode(Number.parseInt(hex, 16)),
+    );
+  }
+}
+
+function isApiPath(pathname: string): boolean {
+  let candidate = pathname;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    if (isCanonicalApiPath(candidate) || candidate.startsWith('/api%')) {
+      return true;
+    }
+    if (!candidate.includes('%')) return false;
+    const decoded = partiallyDecodePath(candidate);
+    if (decoded === candidate) return candidate.startsWith('/api%');
+    candidate = decoded;
+  }
+  return isCanonicalApiPath(candidate) || candidate.startsWith('/api%');
 }
 
 /**
@@ -1902,8 +1980,11 @@ function isApiPath(pathname: string): boolean {
  */
 export const worker: ExportedHandler<Bindings> = {
   async fetch(request, env, ctx) {
-    const response = await app.fetch(request, env, ctx);
     const pathname = new URL(request.url).pathname;
+    if (isApiPath(pathname) && !isCanonicalApiPath(pathname)) {
+      return new Response('404 Not Found', { status: 404 });
+    }
+    const response = await app.fetch(request, env, ctx);
     if (isApiPath(pathname) || response.status !== 404 || !env.ASSETS) {
       return response;
     }
